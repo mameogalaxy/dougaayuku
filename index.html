@@ -103,6 +103,7 @@
   .btn:active { background: var(--accent-dark); }
   .btn:disabled { opacity: .45; cursor: not-allowed; }
   .btn.secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  a.btn { text-decoration: none; text-align: center; }
 
   progress { width: 100%; height: 10px; border-radius: 5px; accent-color: var(--accent); }
   #progText { font-size: 0.85rem; color: var(--muted); text-align: center; margin-top: 6px; font-variant-numeric: tabular-nums; }
@@ -156,6 +157,7 @@
     <div class="seg" id="segMode">
       <button data-mode="video" class="active">🎬 動画を圧縮</button>
       <button data-mode="audio">🎵 音声のみ抽出</button>
+      <button data-mode="merge">🔊 音声を動画に合成</button>
     </div>
   </fieldset>
 
@@ -175,6 +177,13 @@
       <button data-px="1280" class="active">1280px<br><small>おすすめ</small></button>
       <button data-px="1920">1920px<br><small>高画質</small></button>
     </div>
+  </fieldset>
+
+  <fieldset id="fsAudioFile" class="hidden">
+    <legend>合成する音声ファイル(音声が消えた動画に、この音声を付けます)</legend>
+    <button class="btn secondary" id="btnPickAudio" style="margin-top:0;">🎵 音声ファイルを選択</button>
+    <div class="row"><span class="label">音声</span><span class="value" id="audioFileName">未選択</span></div>
+    <input type="file" id="audioFileInput" accept="audio/*,.m4a,.mp3,.wav,.aac,.webm">
   </fieldset>
 
   <fieldset id="fsAudioQ" class="hidden">
@@ -212,9 +221,12 @@
   <div class="row" style="margin-top:8px;"><span class="label">元のサイズ</span><span class="value" id="resultOrig">—</span></div>
   <div class="row"><span class="label">削減率</span><span class="value" id="resultRatio">—</span></div>
   <button class="btn" id="btnDownload">💾 ダウンロード</button>
+  <a class="btn secondary hidden" id="colabLink" target="_blank" rel="noopener"
+     href="https://colab.research.google.com/github/mameogalaxy/dougaayuku/blob/main/transcribe_colab.ipynb">📝 日本語文字起こし(SRT)をする</a>
   <button class="btn secondary" id="btnReset2">別の動画を圧縮する</button>
   <p style="font-size:.8rem; color:var(--muted); margin-top:10px;">
-    iPhoneの場合:ダウンロード後、「ファイル」アプリの「ダウンロード」フォルダに保存されます。Claudeアプリの📎からそのファイルを選んでアップロードできます。
+    iPhoneの場合:ダウンロード後、「ファイル」アプリの「ダウンロード」フォルダに保存されます。Claudeアプリの📎からそのファイルを選んでアップロードできます。<br>
+    文字起こしボタンはGoogle Colabを開きます。ダウンロードした音声をColab上でアップロードすると、faster-whisperによる日本語文字起こし(タイムスタンプ付きSRT)が実行されます。
   </p>
 </div>
 
@@ -243,6 +255,8 @@
   let duration = 0, srcW = 0, srcH = 0;
   let targetMB = 20, longEdge = 1280;
   let mode = 'video', audioKbps = 96;
+  let audioFile = null, mergeAudioEl = null, mergeAudioUrl = null;
+  let videoSrcNode = null;
   let recorder = null, chunks = [], cancelled = false, ended = false;
   let resultBlob = null, resultExt = 'mp4';
   let audioCtx = null;
@@ -401,8 +415,16 @@
     $('fsSize').classList.toggle('hidden', isAudio);
     $('fsRes').classList.toggle('hidden', isAudio);
     $('fsAudioQ').classList.toggle('hidden', !isAudio);
-    $('btnStart').textContent = isAudio ? '音声を抽出' : '圧縮を開始';
+    $('fsAudioFile').classList.toggle('hidden', mode !== 'merge');
+    $('btnStart').textContent = isAudio ? '音声を抽出' : (mode === 'merge' ? '音声を動画に合成' : '圧縮を開始');
     updateEstimate();
+  });
+
+  $('btnPickAudio').addEventListener('click', () => $('audioFileInput').click());
+  $('audioFileInput').addEventListener('change', (e) => {
+    if (!e.target.files[0]) return;
+    audioFile = e.target.files[0];
+    $('audioFileName').textContent = audioFile.name + '(' + fmtSize(audioFile.size) + ')';
   });
 
   $('btnReset1').addEventListener('click', reset);
@@ -410,6 +432,10 @@
   function reset() {
     cancelled = true;
     try { video.pause(); } catch (e) {}
+    if (mergeAudioEl) { try { mergeAudioEl.pause(); } catch (e) {} }
+    audioFile = null;
+    $('audioFileInput').value = '';
+    $('audioFileName').textContent = '未選択';
     $('file').value = '';
     resultBlob = null;
     clearError();
@@ -433,25 +459,44 @@
       showError('お使いのブラウザはこの変換に対応していません。iPhoneならSafari、PCならChrome/Edge/Safariの最新版をお使いください。');
       return;
     }
+    const isMerge = mode === 'merge';
+    if (isMerge && !audioFile) {
+      showError('合成する音声ファイルを選択してください。');
+      return;
+    }
     cancelled = false;
     ended = false;
     chunks = [];
-    $('progTitle').textContent = isAudio ? '音声を抽出しています…' : '圧縮しています…';
+    $('progTitle').textContent = isAudio ? '音声を抽出しています…' : (isMerge ? '合成しています…' : '圧縮しています…');
     show('progress');
 
-    // 音声: video要素 → AudioContext → MediaStream(スピーカーには出さない)
+    // 音声: video要素(+合成モードでは音声ファイル)→ AudioContext → MediaStream(スピーカーには出さない)
     let audioTracks = [];
+    mergeAudioEl = null;
     try {
       if (!audioCtx) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        const srcNode = audioCtx.createMediaElementSource(video);
-        audioCtx._dest = audioCtx.createMediaStreamDestination();
-        srcNode.connect(audioCtx._dest);
+        videoSrcNode = audioCtx.createMediaElementSource(video);
       }
       await audioCtx.resume();
-      audioTracks = audioCtx._dest.stream.getAudioTracks();
+      const dest = audioCtx.createMediaStreamDestination();
+      videoSrcNode.disconnect();
+      videoSrcNode.connect(dest);
+      if (isMerge) {
+        if (mergeAudioUrl) URL.revokeObjectURL(mergeAudioUrl);
+        mergeAudioUrl = URL.createObjectURL(audioFile);
+        mergeAudioEl = new Audio();
+        mergeAudioEl.src = mergeAudioUrl;
+        audioCtx.createMediaElementSource(mergeAudioEl).connect(dest);
+      }
+      audioTracks = dest.stream.getAudioTracks();
     } catch (e) {
       // 音声の取得に失敗しても映像のみで続行(音声抽出モードでは下でエラーにする)
+    }
+    if (isMerge && !mergeAudioEl) {
+      showError('音声ファイルを読み込めませんでした。別の形式(.m4a / .mp3 など)でお試しください。');
+      show('settings');
+      return;
     }
 
     let stream;
@@ -486,8 +531,13 @@
     video.currentTime = 0;
     try {
       await video.play();
+      if (mergeAudioEl) {
+        mergeAudioEl.currentTime = 0;
+        await mergeAudioEl.play();
+      }
     } catch (e) {
-      showError('動画の再生を開始できませんでした: ' + e.message);
+      showError('再生を開始できませんでした: ' + e.message);
+      video.pause();
       show('settings');
       return;
     }
@@ -497,6 +547,7 @@
 
     video.onended = () => {
       ended = true;
+      if (mergeAudioEl) mergeAudioEl.pause();
       // 最後のフレームを確実に書き込んでから停止
       setTimeout(() => { if (recorder.state !== 'inactive') recorder.stop(); }, 300);
     };
@@ -523,7 +574,10 @@
   function finish(mime) {
     resultBlob = new Blob(chunks, { type: mime.split(';')[0] });
     chunks = [];
-    $('doneTitle').textContent = mode === 'audio' ? '✅ 音声の抽出が完了しました' : '✅ 圧縮が完了しました';
+    $('doneTitle').textContent = mode === 'audio' ? '✅ 音声の抽出が完了しました'
+      : (mode === 'merge' ? '✅ 音声の合成が完了しました' : '✅ 圧縮が完了しました');
+    // 音声モードでは文字起こし(Colab)への導線を出す
+    $('colabLink').classList.toggle('hidden', mode !== 'audio');
     $('resultSize').textContent = fmtSize(resultBlob.size);
     $('resultOrig').textContent = fmtSize(file.size);
     const ratio = (1 - resultBlob.size / file.size) * 100;
@@ -544,7 +598,7 @@
     const a = document.createElement('a');
     a.href = URL.createObjectURL(resultBlob);
     const base = (file.name.replace(/\.[^.]+$/, '') || 'video');
-    a.download = base + (mode === 'audio' ? '_audio.' : '_compressed.') + resultExt;
+    a.download = base + (mode === 'audio' ? '_audio.' : (mode === 'merge' ? '_merged.' : '_compressed.')) + resultExt;
     document.body.appendChild(a);
     a.click();
     setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);

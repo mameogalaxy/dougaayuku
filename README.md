@@ -10,6 +10,8 @@ iPhoneで録画した動画を、Claudeにアップロードできるサイズ(3
 - **完全にプライベート** — 動画はサーバーに送信されず、すべて端末内で処理されます
 - **かんたん** — 動画を選んで目標サイズ(10 / 20 / 28 MB)を選ぶだけ
 - **音声のみ抽出** — 動画から音声だけを切り出してダウンロードすることもできます(iPhoneでは .m4a / AAC)
+- **音声を動画に合成** — 音声が消えてしまった動画に、音声ファイルを付け直せます(編集で無音になった動画+抽出しておいた音声、など)
+- **日本語文字起こし(SRT)** — 抽出した音声をGoogle Colab上のfaster-whisperでタイムスタンプ付きSRTに変換できます([ノートブックを開く](https://colab.research.google.com/github/mameogalaxy/dougaayuku/blob/main/transcribe_colab.ipynb))。PCなら `transcribe.py` でも同じことができます(`pip install faster-whisper` して `python transcribe.py 音声ファイル`)
 - 再エンコードにより位置情報などのメタデータも取り除かれます
 
 ## 使い方
