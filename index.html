@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>動画圧縮ツール — Claudeにアップできるサイズへ</title>
+<style>
+  :root {
+    --bg: #f5f4f0;
+    --card: #ffffff;
+    --text: #1f1e1c;
+    --muted: #6e6a63;
+    --accent: #c96442;
+    --accent-dark: #a94f31;
+    --border: #e2ded6;
+    --ok: #2e7d4f;
+    --warn: #b3541e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1a1915;
+      --card: #262420;
+      --text: #ece9e2;
+      --muted: #a39d92;
+      --border: #3a372f;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    padding: 16px;
+    max-width: 640px;
+    margin: 0 auto;
+  }
+  header { text-align: center; padding: 20px 0 12px; }
+  header h1 { font-size: 1.35rem; font-weight: 700; }
+  header p { color: var(--muted); font-size: 0.85rem; margin-top: 4px; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 18px;
+    margin-bottom: 14px;
+  }
+  /* ファイル選択 */
+  #drop {
+    border: 2px dashed var(--border);
+    border-radius: 14px;
+    padding: 36px 16px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  #drop.hover { border-color: var(--accent); background: rgba(201,100,66,.06); }
+  #drop .icon { font-size: 2.2rem; }
+  #drop p { color: var(--muted); font-size: 0.9rem; margin-top: 8px; }
+  #drop strong { color: var(--text); font-size: 1rem; }
+  input[type="file"] { display: none; }
+
+  .row { display: flex; justify-content: space-between; gap: 8px; padding: 6px 0; font-size: 0.92rem; }
+  .row .label { color: var(--muted); flex-shrink: 0; }
+  .row .value { font-variant-numeric: tabular-nums; text-align: right; word-break: break-all; }
+
+  fieldset { border: none; margin-top: 10px; }
+  legend { font-size: 0.85rem; color: var(--muted); margin-bottom: 6px; }
+  .seg { display: flex; gap: 6px; flex-wrap: wrap; }
+  .seg button {
+    flex: 1 1 auto;
+    min-width: 70px;
+    padding: 10px 8px;
+    font-size: 0.9rem;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text);
+    cursor: pointer;
+  }
+  .seg button.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    font-weight: 600;
+  }
+  .estimate { font-size: 0.85rem; color: var(--muted); margin-top: 10px; }
+  .estimate b { color: var(--text); }
+
+  .btn {
+    display: block;
+    width: 100%;
+    padding: 15px;
+    font-size: 1.05rem;
+    font-weight: 700;
+    border: none;
+    border-radius: 12px;
+    background: var(--accent);
+    color: #fff;
+    cursor: pointer;
+    margin-top: 14px;
+  }
+  .btn:active { background: var(--accent-dark); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn.secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+
+  progress { width: 100%; height: 10px; border-radius: 5px; accent-color: var(--accent); }
+  #progText { font-size: 0.85rem; color: var(--muted); text-align: center; margin-top: 6px; font-variant-numeric: tabular-nums; }
+
+  .result-size { font-size: 1.6rem; font-weight: 700; text-align: center; margin: 6px 0; }
+  .result-note { text-align: center; font-size: 0.85rem; }
+  .ok { color: var(--ok); }
+  .warn { color: var(--warn); }
+
+  .hidden { display: none !important; }
+  #err {
+    background: rgba(179,84,30,.1);
+    border: 1px solid var(--warn);
+    color: var(--warn);
+    border-radius: 10px;
+    padding: 12px;
+    font-size: 0.88rem;
+    margin-bottom: 14px;
+  }
+  footer { text-align: center; color: var(--muted); font-size: 0.78rem; padding: 12px 0 24px; }
+  canvas, video#src { display: none; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🎬 動画圧縮ツール</h1>
+  <p>iPhoneで撮った動画を、Claudeにアップロードできるサイズに圧縮します。<br>処理はすべて端末内で完結。動画はどこにも送信されません。</p>
+</header>
+
+<div id="err" class="hidden"></div>
+
+<!-- STEP 1: ファイル選択 -->
+<div class="card" id="stepPick">
+  <div id="drop">
+    <div class="icon">📥</div>
+    <strong>動画を選択</strong>
+    <p>タップして選ぶか、ここにドラッグ&ドロップ<br>(.mov / .mp4 など)</p>
+  </div>
+  <input type="file" id="file" accept="video/*,.mov,.mp4,.m4v">
+</div>
+
+<!-- STEP 2: 設定 -->
+<div class="card hidden" id="stepSettings">
+  <div class="row"><span class="label">ファイル</span><span class="value" id="infoName">—</span></div>
+  <div class="row"><span class="label">元のサイズ</span><span class="value" id="infoSize">—</span></div>
+  <div class="row"><span class="label">長さ / 解像度</span><span class="value" id="infoMeta">—</span></div>
+
+  <fieldset>
+    <legend>目標サイズ(Claudeの上限は1ファイル約30MB)</legend>
+    <div class="seg" id="segSize">
+      <button data-mb="10">10 MB</button>
+      <button data-mb="20" class="active">20 MB<br><small>おすすめ</small></button>
+      <button data-mb="28">28 MB</button>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>解像度(長辺)</legend>
+    <div class="seg" id="segRes">
+      <button data-px="854">854px<br><small>小さめ</small></button>
+      <button data-px="1280" class="active">1280px<br><small>おすすめ</small></button>
+      <button data-px="1920">1920px<br><small>高画質</small></button>
+    </div>
+  </fieldset>
+
+  <div class="estimate" id="estimate"></div>
+
+  <button class="btn" id="btnStart">圧縮を開始</button>
+  <button class="btn secondary" id="btnReset1">別の動画を選ぶ</button>
+</div>
+
+<!-- STEP 3: 処理中 -->
+<div class="card hidden" id="stepProgress">
+  <p style="text-align:center; font-weight:600; margin-bottom:10px;">圧縮しています…</p>
+  <progress id="prog" max="100" value="0"></progress>
+  <div id="progText">0%</div>
+  <p style="font-size:.8rem; color:var(--muted); text-align:center; margin-top:10px;">
+    動画を再生しながら再エンコードするため、動画の長さと同じくらい時間がかかります。<br>
+    この画面を開いたままお待ちください(画面ロックしないでください)。
+  </p>
+  <button class="btn secondary" id="btnCancel">キャンセル</button>
+</div>
+
+<!-- STEP 4: 完了 -->
+<div class="card hidden" id="stepDone">
+  <p style="text-align:center; font-weight:600;">✅ 圧縮が完了しました</p>
+  <div class="result-size" id="resultSize">—</div>
+  <p class="result-note" id="resultNote"></p>
+  <div class="row" style="margin-top:8px;"><span class="label">元のサイズ</span><span class="value" id="resultOrig">—</span></div>
+  <div class="row"><span class="label">削減率</span><span class="value" id="resultRatio">—</span></div>
+  <button class="btn" id="btnDownload">💾 ダウンロード</button>
+  <button class="btn secondary" id="btnReset2">別の動画を圧縮する</button>
+  <p style="font-size:.8rem; color:var(--muted); margin-top:10px;">
+    iPhoneの場合:ダウンロード後、「ファイル」アプリの「ダウンロード」フォルダに保存されます。Claudeアプリの📎からそのファイルを選んでアップロードできます。
+  </p>
+</div>
+
+<footer>
+  すべての処理はブラウザ内(あなたの端末の中)で行われます。<br>
+  再エンコードにより位置情報などのメタデータも取り除かれます。
+</footer>
+
+<video id="src" playsinline></video>
+<canvas id="cv"></canvas>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const steps = { pick: $('stepPick'), settings: $('stepSettings'), progress: $('stepProgress'), done: $('stepDone') };
+  const video = $('src');
+  const canvas = $('cv');
+  const ctx = canvas.getContext('2d');
+
+  const AUDIO_BPS = 96000;
+  const MIN_VIDEO_BPS = 250000;
+  const MAX_VIDEO_BPS = 12000000;
+
+  let file = null;
+  let objectUrl = null;
+  let duration = 0, srcW = 0, srcH = 0;
+  let targetMB = 20, longEdge = 1280;
+  let recorder = null, chunks = [], cancelled = false, ended = false;
+  let resultBlob = null, resultExt = 'mp4';
+  let audioCtx = null;
+
+  function show(name) {
+    for (const k in steps) steps[k].classList.toggle('hidden', k !== name);
+  }
+  function fmtSize(bytes) {
+    if (bytes >= 1024 * 1024) return (bytes / 1048576).toFixed(1) + ' MB';
+    return Math.round(bytes / 1024) + ' KB';
+  }
+  function fmtTime(sec) {
+    const m = Math.floor(sec / 60), s = Math.round(sec % 60);
+    return m + '分' + String(s).padStart(2, '0') + '秒';
+  }
+  function showError(msg) {
+    const el = $('err');
+    el.textContent = msg;
+    el.classList.remove('hidden');
+  }
+  function clearError() { $('err').classList.add('hidden'); }
+
+  function pickMime() {
+    const candidates = [
+      'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+      'video/mp4;codecs=avc1',
+      'video/mp4',
+      'video/webm;codecs=vp9,opus',
+      'video/webm;codecs=vp8,opus',
+      'video/webm',
+    ];
+    for (const c of candidates) {
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported(c)) return c;
+    }
+    return null;
+  }
+
+  function videoBitrate() {
+    const targetBits = targetMB * 1048576 * 8 * 0.92; // コンテナのオーバーヘッド分を差し引く
+    const bps = targetBits / duration - AUDIO_BPS;
+    return Math.max(MIN_VIDEO_BPS, Math.min(MAX_VIDEO_BPS, Math.floor(bps)));
+  }
+
+  function updateEstimate() {
+    if (!duration) return;
+    const vbps = videoBitrate();
+    const estBytes = (vbps + AUDIO_BPS) * duration / 8;
+    const scale = Math.min(1, longEdge / Math.max(srcW, srcH));
+    const w = Math.round(srcW * scale / 2) * 2, h = Math.round(srcH * scale / 2) * 2;
+    let html = '推定: <b>' + fmtSize(estBytes) + '</b> 前後 / ' + w + '×' + h +
+               ' / 映像 ' + (vbps / 1000000).toFixed(1) + ' Mbps';
+    if (vbps === MIN_VIDEO_BPS && estBytes > targetMB * 1048576) {
+      html += '<br><span class="warn">⚠️ 動画が長いため目標サイズに収まらない可能性があります。目標を上げるか動画を分割してください。</span>';
+    } else if (vbps < 800000) {
+      html += '<br><span class="warn">※ ビットレートが低めです。画質が粗くなる場合は解像度を854pxにすると改善します。</span>';
+    }
+    $('estimate').innerHTML = html;
+  }
+
+  // --- ファイル選択 ---
+  const drop = $('drop');
+  drop.addEventListener('click', () => $('file').click());
+  drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('hover'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('hover'));
+  drop.addEventListener('drop', (e) => {
+    e.preventDefault();
+    drop.classList.remove('hover');
+    if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
+  });
+  $('file').addEventListener('change', (e) => { if (e.target.files[0]) loadFile(e.target.files[0]); });
+
+  function loadFile(f) {
+    clearError();
+    file = f;
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+    objectUrl = URL.createObjectURL(f);
+    video.src = objectUrl;
+    video.muted = false;
+    video.onloadedmetadata = () => {
+      duration = video.duration;
+      srcW = video.videoWidth;
+      srcH = video.videoHeight;
+      if (!duration || !srcW) {
+        showError('この動画を読み込めませんでした。別の形式(.mov / .mp4)でお試しください。');
+        return;
+      }
+      $('infoName').textContent = f.name;
+      $('infoSize').textContent = fmtSize(f.size);
+      $('infoMeta').textContent = fmtTime(duration) + ' / ' + srcW + '×' + srcH;
+      updateEstimate();
+      show('settings');
+    };
+    video.onerror = () => {
+      showError('この動画はブラウザで再生できない形式のため、圧縮できません。iPhoneの「設定 > カメラ > フォーマット」を「互換性優先」にして撮影した動画、または .mp4 をお試しください。');
+    };
+  }
+
+  // --- 設定 ---
+  function segHandler(segId, attr, cb) {
+    $(segId).addEventListener('click', (e) => {
+      const btn = e.target.closest('button');
+      if (!btn) return;
+      $(segId).querySelectorAll('button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      cb(Number(btn.dataset[attr]));
+      updateEstimate();
+    });
+  }
+  segHandler('segSize', 'mb', (v) => targetMB = v);
+  segHandler('segRes', 'px', (v) => longEdge = v);
+
+  $('btnReset1').addEventListener('click', reset);
+  $('btnReset2').addEventListener('click', reset);
+  function reset() {
+    cancelled = true;
+    try { video.pause(); } catch (e) {}
+    $('file').value = '';
+    resultBlob = null;
+    clearError();
+    show('pick');
+  }
+
+  // --- 圧縮 ---
+  $('btnStart').addEventListener('click', startCompress);
+  $('btnCancel').addEventListener('click', () => {
+    cancelled = true;
+    video.pause();
+    if (recorder && recorder.state !== 'inactive') recorder.stop();
+    reset();
+  });
+
+  async function startCompress() {
+    clearError();
+    const mime = pickMime();
+    if (!mime) {
+      showError('お使いのブラウザは動画の再エンコードに対応していません。iPhoneならSafari、PCならChrome/Edge/Safariの最新版をお使いください。');
+      return;
+    }
+    cancelled = false;
+    ended = false;
+    chunks = [];
+    show('progress');
+
+    const scale = Math.min(1, longEdge / Math.max(srcW, srcH));
+    canvas.width = Math.round(srcW * scale / 2) * 2;
+    canvas.height = Math.round(srcH * scale / 2) * 2;
+
+    // 音声: video要素 → AudioContext → MediaStream(スピーカーには出さない)
+    let audioTracks = [];
+    try {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const srcNode = audioCtx.createMediaElementSource(video);
+        audioCtx._dest = audioCtx.createMediaStreamDestination();
+        srcNode.connect(audioCtx._dest);
+      }
+      await audioCtx.resume();
+      audioTracks = audioCtx._dest.stream.getAudioTracks();
+    } catch (e) {
+      // 音声の取得に失敗しても映像のみで続行
+    }
+
+    const canvasStream = canvas.captureStream(30);
+    const stream = new MediaStream([...canvasStream.getVideoTracks(), ...audioTracks]);
+
+    recorder = new MediaRecorder(stream, {
+      mimeType: mime,
+      videoBitsPerSecond: videoBitrate(),
+      audioBitsPerSecond: AUDIO_BPS,
+    });
+    resultExt = mime.includes('mp4') ? 'mp4' : 'webm';
+    recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+    recorder.onstop = () => { if (!cancelled) finish(mime); };
+
+    video.currentTime = 0;
+    try {
+      await video.play();
+    } catch (e) {
+      showError('動画の再生を開始できませんでした: ' + e.message);
+      show('settings');
+      return;
+    }
+    recorder.start(1000);
+    drawLoop();
+    progressLoop();
+
+    video.onended = () => {
+      ended = true;
+      // 最後のフレームを確実に書き込んでから停止
+      setTimeout(() => { if (recorder.state !== 'inactive') recorder.stop(); }, 300);
+    };
+  }
+
+  function drawLoop() {
+    if (cancelled || ended) return;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    if (video.requestVideoFrameCallback) {
+      video.requestVideoFrameCallback(() => drawLoop());
+    } else {
+      requestAnimationFrame(drawLoop);
+    }
+  }
+
+  function progressLoop() {
+    if (cancelled || ended) return;
+    const pct = Math.min(100, video.currentTime / duration * 100);
+    $('prog').value = pct;
+    $('progText').textContent = Math.round(pct) + '%(' + fmtTime(video.currentTime) + ' / ' + fmtTime(duration) + ')';
+    requestAnimationFrame(progressLoop);
+  }
+
+  function finish(mime) {
+    resultBlob = new Blob(chunks, { type: mime.split(';')[0] });
+    chunks = [];
+    $('resultSize').textContent = fmtSize(resultBlob.size);
+    $('resultOrig').textContent = fmtSize(file.size);
+    const ratio = (1 - resultBlob.size / file.size) * 100;
+    $('resultRatio').textContent = ratio > 0 ? ratio.toFixed(0) + '% 削減' : '削減なし';
+    const note = $('resultNote');
+    if (resultBlob.size <= 30 * 1048576) {
+      note.textContent = 'Claudeにアップロードできるサイズです 👍';
+      note.className = 'result-note ok';
+    } else {
+      note.textContent = 'まだ30MBを超えています。目標サイズを下げるか、解像度を854pxにしてもう一度お試しください。';
+      note.className = 'result-note warn';
+    }
+    show('done');
+  }
+
+  $('btnDownload').addEventListener('click', () => {
+    if (!resultBlob) return;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(resultBlob);
+    const base = (file.name.replace(/\.[^.]+$/, '') || 'video');
+    a.download = base + '_compressed.' + resultExt;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  });
+})();
+</script>
+</body>
+</html>
