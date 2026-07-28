@@ -318,6 +318,7 @@
   const SYNC_FLAGS = 0x02000000;     // キーフレーム
   const NONSYNC_FLAGS = 0x01010000;  // それ以外
 
+  // 戻り値は Blob に渡す部品の配列。巨大な連結配列を作らないことでメモリを節約する
   function buildFragment(trackId, seqNum, samples) {
     const mfhd = box('mfhd', u32(0), u32(seqNum));
     // default-base-is-moof のみ指定し、値は trun に持たせる
@@ -348,14 +349,15 @@
     const dataOffsetPos = (moof.length - trun.length) + 8 + 8;
     new DataView(moof.buffer).setInt32(dataOffsetPos, moof.length + 8);
 
-    const mdat = new Uint8Array(8 + mdatSize);
-    const mdv = new DataView(mdat.buffer);
-    mdv.setUint32(0, mdat.length);
-    mdat.set([0x6d, 0x64, 0x61, 0x74], 4);
-    let off = 8;
-    for (const s of samples) { mdat.set(s.data, off); off += s.size; }
+    // mdat はヘッダだけ作り、中身はサンプルの配列をそのまま Blob に渡す
+    const mdatHeader = new Uint8Array(8);
+    const mdv = new DataView(mdatHeader.buffer);
+    mdv.setUint32(0, 8 + mdatSize);
+    mdatHeader.set([0x6d, 0x64, 0x61, 0x74], 4);
 
-    return [moof, mdat];
+    const parts = [moof, mdatHeader];
+    for (const s of samples) parts.push(s.data);
+    return parts;
   }
 
   /**
@@ -374,10 +376,14 @@
     const samplesByTrack = new Map();
     let info = null, parseError = null;
 
+    const isVideo = (t) => t.type === 'video' || !!(t.video && t.video.width);
+    const isAudio = (t) => t.type === 'audio' || !!(t.audio && t.audio.sample_rate);
+
     mp4.onError = (e) => { parseError = e; };
     mp4.onReady = (i) => {
       info = i;
-      for (const t of i.tracks) {
+      // iPhoneの動画にはメタデータtrackが含まれることがある。映像と音声だけを扱う
+      for (const t of i.tracks.filter((t) => isVideo(t) || isAudio(t))) {
         samplesByTrack.set(t.id, []);
         mp4.setExtractionOptions(t.id, null, { nbSamples: 1000 });
       }
@@ -391,9 +397,8 @@
       }
     };
 
-    const ab = buf.slice(0);
-    ab.fileStart = 0;
-    mp4.appendBuffer(ab);
+    buf.fileStart = 0;
+    mp4.appendBuffer(buf);
     mp4.flush();
     onProgress && onProgress(0.5);
 
@@ -401,21 +406,29 @@
     if (!info || !info.tracks || !info.tracks.length) {
       throw new Error('この動画は分割に対応していません。MP4 または MOV 形式でお試しください。');
     }
-    for (const t of info.tracks) {
-      if (!(samplesByTrack.get(t.id) || []).length) {
-        throw new Error('動画データを読み取れませんでした。別の動画でお試しください。');
-      }
+
+    // 実際にデータが取れたトラックだけを対象にする
+    const tracks = info.tracks.filter((t) => (samplesByTrack.get(t.id) || []).length > 0);
+    const videoTrack = tracks.find(isVideo);
+    if (!videoTrack) {
+      const kinds = info.tracks.map((t) => t.type || (t.video ? 'video' : (t.audio ? 'audio' : '?'))).join(', ');
+      throw new Error('映像トラックを読み取れませんでした(検出されたトラック: ' + (kinds || 'なし') + ')。'
+        + 'MP4 / MOV 形式の動画でお試しください。');
+    }
+
+    // サンプルは別途コピー済みなので、mp4box が抱えている元データを解放してメモリを空ける
+    for (const t of tracks) {
+      try { mp4.releaseUsedSamples(t.id, samplesByTrack.get(t.id).length); } catch (e) { /* 解放できなくても続行 */ }
     }
 
     // --- 初期化セグメント(ftyp + moov)を作る ---
-    for (const t of info.tracks) {
+    for (const t of tracks) {
       mp4.setSegmentOptions(t.id, null, { nbSamples: Number.MAX_SAFE_INTEGER });
     }
     mp4.onSegment = () => {};
     const initBuffer = new Uint8Array(mp4.initializeSegmentation().buffer);
 
     // --- 分割位置を決める(映像のキーフレーム基準) ---
-    const videoTrack = info.tracks.find((t) => t.type === 'video' || (t.video && t.video.width)) || info.tracks[0];
     const vSamples = samplesByTrack.get(videoTrack.id);
     const vTimescale = videoTrack.timescale;
     const vStart = vSamples[0].dts;
@@ -443,8 +456,9 @@
         : (lastS.dts + lastS.duration - vStart) / vTimescale;
 
       const parts = [initBuffer];
+      const used = [];
       let seq = 1;
-      for (const t of info.tracks) {
+      for (const t of tracks) {
         const all = samplesByTrack.get(t.id);
         let sel;
         if (t.id === videoTrack.id) {
@@ -459,11 +473,18 @@
         }
         if (!sel.length) continue;
         const first = sel[0].dts;
-        const rebased = sel.map((s) => ({ ...s, dts: s.dts - first, cts: s.cts - first }));
-        parts.push(...buildFragment(t.id, seq++, rebased));
+        const rebased = sel.map((s) => ({
+          data: s.data, size: s.size, duration: s.duration, is_sync: s.is_sync,
+          dts: s.dts - first, cts: s.cts - first,
+        }));
+        // 要素数が多くなるため spread は使わない(引数の上限に達する恐れがある)
+        for (const p of buildFragment(t.id, seq++, rebased)) parts.push(p);
+        for (const s of sel) used.push(s);
       }
 
       results.push({ blob: new Blob(parts, { type: 'video/mp4' }), start: startTime, end: endTime });
+      // Blob に取り込んだサンプルは解放してメモリを抑える
+      for (const s of used) s.data = null;
       onProgress && onProgress(0.5 + 0.5 * ((c + 1) / startIdx.length));
     }
 
@@ -513,6 +534,8 @@
     const el = $('err');
     el.textContent = msg;
     el.classList.remove('hidden');
+    // 画面下部で操作していると見落とすため、エラーまでスクロールする
+    try { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) { window.scrollTo(0, 0); }
   }
   function clearError() { $('err').classList.add('hidden'); }
 
@@ -562,6 +585,10 @@
       html += '<br>※ 分割位置はキーフレームに合わせるため、' + splitSeconds + '秒ちょうどにはなりません。';
       if (per > 30 * 1048576) {
         html += '<br><span class="warn">⚠️ 1本が30MBを超えそうです。より短い長さを選ぶか、先に圧縮してください。</span>';
+      }
+      if (file.size > 400 * 1048576) {
+        html += '<br><span class="warn">⚠️ ファイルが大きいため、端末のメモリ不足で失敗することがあります。'
+             + '失敗する場合は先に「動画を圧縮」をお使いください。</span>';
       }
       $('estimate').innerHTML = html;
       return;
@@ -846,7 +873,14 @@
         $('progText').textContent = pct + '%';
       });
     } catch (e) {
-      showError(e.message || String(e));
+      const msg = (e && e.message) ? e.message : String(e);
+      // メモリ不足は原因が分かりにくいので個別に案内する
+      const diag = '(' + file.name + ' / ' + fmtSize(file.size) + ')';
+      if (/allocat|memory|out of/i.test(msg)) {
+        showError('動画が大きすぎて分割できませんでした(端末のメモリ不足)。先に「動画を圧縮」でサイズを下げてからお試しください。' + diag);
+      } else {
+        showError('分割できませんでした: ' + msg + ' ' + diag);
+      }
       show('settings');
       return;
     }
