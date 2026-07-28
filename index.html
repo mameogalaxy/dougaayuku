@@ -105,6 +105,30 @@
   .btn.secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
   a.btn { text-decoration: none; text-align: center; }
 
+  /* 分割結果の一覧 */
+  .chunk {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .chunk:last-child { border-bottom: none; }
+  .chunk .meta { flex: 1; min-width: 0; }
+  .chunk .meta b { font-size: 0.95rem; }
+  .chunk .meta span { display: block; font-size: 0.8rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .chunk a {
+    flex-shrink: 0;
+    padding: 9px 14px;
+    border-radius: 9px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 0.88rem;
+    font-weight: 600;
+    text-decoration: none;
+  }
+  .chunk a.over { background: var(--warn); }
+
   progress { width: 100%; height: 10px; border-radius: 5px; accent-color: var(--accent); }
   #progText { font-size: 0.85rem; color: var(--muted); text-align: center; margin-top: 6px; font-variant-numeric: tabular-nums; }
 
@@ -158,6 +182,7 @@
       <button data-mode="video" class="active">🎬 動画を圧縮</button>
       <button data-mode="audio">🎵 音声のみ抽出</button>
       <button data-mode="merge">🔊 音声を動画に合成</button>
+      <button data-mode="split">✂️ 分割(無劣化)</button>
     </div>
   </fieldset>
 
@@ -195,6 +220,15 @@
     </div>
   </fieldset>
 
+  <fieldset id="fsSplit" class="hidden">
+    <legend>1本あたりの長さ</legend>
+    <div class="seg" id="segSplit">
+      <button data-sec="15">15秒</button>
+      <button data-sec="30" class="active">30秒<br><small>おすすめ</small></button>
+      <button data-sec="60">60秒</button>
+    </div>
+  </fieldset>
+
   <div class="estimate" id="estimate"></div>
 
   <button class="btn" id="btnStart">圧縮を開始</button>
@@ -206,7 +240,7 @@
   <p style="text-align:center; font-weight:600; margin-bottom:10px;" id="progTitle">圧縮しています…</p>
   <progress id="prog" max="100" value="0"></progress>
   <div id="progText">0%</div>
-  <p style="font-size:.8rem; color:var(--muted); text-align:center; margin-top:10px;">
+  <p style="font-size:.8rem; color:var(--muted); text-align:center; margin-top:10px;" id="progHelp">
     動画を再生しながら再エンコードするため、動画の長さと同じくらい時間がかかります。<br>
     この画面を開いたままお待ちください(画面ロックしないでください)。
   </p>
@@ -216,15 +250,24 @@
 <!-- STEP 4: 完了 -->
 <div class="card hidden" id="stepDone">
   <p style="text-align:center; font-weight:600;" id="doneTitle">✅ 圧縮が完了しました</p>
-  <div class="result-size" id="resultSize">—</div>
-  <p class="result-note" id="resultNote"></p>
-  <div class="row" style="margin-top:8px;"><span class="label">元のサイズ</span><span class="value" id="resultOrig">—</span></div>
-  <div class="row"><span class="label">削減率</span><span class="value" id="resultRatio">—</span></div>
-  <button class="btn" id="btnDownload">💾 ダウンロード</button>
-  <a class="btn secondary hidden" id="colabLink" target="_blank" rel="noopener"
-     href="https://colab.research.google.com/github/mameogalaxy/dougaayuku/blob/main/transcribe_colab.ipynb">📝 日本語文字起こし(SRT)をする</a>
+
+  <div id="singleResult">
+    <div class="result-size" id="resultSize">—</div>
+    <p class="result-note" id="resultNote"></p>
+    <div class="row" style="margin-top:8px;"><span class="label">元のサイズ</span><span class="value" id="resultOrig">—</span></div>
+    <div class="row"><span class="label">削減率</span><span class="value" id="resultRatio">—</span></div>
+    <button class="btn" id="btnDownload">💾 ダウンロード</button>
+    <a class="btn secondary hidden" id="colabLink" target="_blank" rel="noopener"
+       href="https://colab.research.google.com/github/mameogalaxy/dougaayuku/blob/main/transcribe_colab.ipynb">📝 日本語文字起こし(SRT)をする</a>
+  </div>
+
+  <div id="splitResult" class="hidden">
+    <p class="result-note" id="splitNote"></p>
+    <div id="splitList"></div>
+  </div>
+
   <button class="btn secondary" id="btnReset2">別の動画を圧縮する</button>
-  <p style="font-size:.8rem; color:var(--muted); margin-top:10px;">
+  <p style="font-size:.8rem; color:var(--muted); margin-top:10px;" id="doneHelp">
     iPhoneの場合:ダウンロード後、「ファイル」アプリの「ダウンロード」フォルダに保存されます。Claudeアプリの📎からそのファイルを選んでアップロードできます。<br>
     文字起こしボタンはGoogle Colabを開きます。ダウンロードした音声をColab上でアップロードすると、faster-whisperによる日本語文字起こし(タイムスタンプ付きSRT)が実行されます。
   </p>
@@ -237,6 +280,199 @@
 
 <video id="src" playsinline></video>
 <canvas id="cv"></canvas>
+
+<script src="vendor/mp4box.min.js"></script>
+<script>
+// ===== 再エンコードなしの時間分割(fragmented MP4 として書き出す) =====
+(() => {
+  'use strict';
+
+  function box(type, ...payloads) {
+    let len = 0;
+    for (const p of payloads) len += p.byteLength;
+    const out = new Uint8Array(8 + len);
+    const dv = new DataView(out.buffer);
+    dv.setUint32(0, out.length);
+    for (let i = 0; i < 4; i++) out[4 + i] = type.charCodeAt(i);
+    let off = 8;
+    for (const p of payloads) { out.set(p, off); off += p.byteLength; }
+    return out;
+  }
+  function u32(...vals) {
+    const a = new Uint8Array(4 * vals.length);
+    const dv = new DataView(a.buffer);
+    vals.forEach((v, i) => dv.setUint32(4 * i, v >>> 0));
+    return a;
+  }
+  function i32(v) {
+    const a = new Uint8Array(4);
+    new DataView(a.buffer).setInt32(0, v | 0);
+    return a;
+  }
+  function u64(v) {
+    const a = new Uint8Array(8);
+    new DataView(a.buffer).setBigUint64(0, BigInt(Math.max(0, Math.round(v))));
+    return a;
+  }
+
+  const SYNC_FLAGS = 0x02000000;     // キーフレーム
+  const NONSYNC_FLAGS = 0x01010000;  // それ以外
+
+  function buildFragment(trackId, seqNum, samples) {
+    const mfhd = box('mfhd', u32(0), u32(seqNum));
+    // default-base-is-moof のみ指定し、値は trun に持たせる
+    const tfhd = box('tfhd', new Uint8Array([0x00, 0x02, 0x00, 0x00]), u32(trackId));
+    const tfdt = box('tfdt', new Uint8Array([0x01, 0x00, 0x00, 0x00]), u64(0));
+
+    // data-offset + duration + size + flags + composition-offset
+    const trunFlags = 0x000f01;
+    const entries = new Uint8Array(16 * samples.length);
+    const edv = new DataView(entries.buffer);
+    let mdatSize = 0;
+    samples.forEach((s, i) => {
+      edv.setUint32(16 * i, s.duration >>> 0);
+      edv.setUint32(16 * i + 4, s.size >>> 0);
+      edv.setUint32(16 * i + 8, (s.is_sync ? SYNC_FLAGS : NONSYNC_FLAGS) >>> 0);
+      edv.setInt32(16 * i + 12, (s.cts - s.dts) | 0);
+      mdatSize += s.size;
+    });
+    const trunHeader = new Uint8Array(8);
+    const tdv = new DataView(trunHeader.buffer);
+    tdv.setUint32(0, (1 << 24) | trunFlags); // version=1(符号付きcomposition offset)
+    tdv.setUint32(4, samples.length);
+    const trun = box('trun', trunHeader, i32(0), entries);
+
+    const moof = box('moof', mfhd, box('traf', tfhd, tfdt, trun));
+
+    // moof サイズ確定後に trun の data_offset を埋める
+    const dataOffsetPos = (moof.length - trun.length) + 8 + 8;
+    new DataView(moof.buffer).setInt32(dataOffsetPos, moof.length + 8);
+
+    const mdat = new Uint8Array(8 + mdatSize);
+    const mdv = new DataView(mdat.buffer);
+    mdv.setUint32(0, mdat.length);
+    mdat.set([0x6d, 0x64, 0x61, 0x74], 4);
+    let off = 8;
+    for (const s of samples) { mdat.set(s.data, off); off += s.size; }
+
+    return [moof, mdat];
+  }
+
+  /**
+   * 動画を指定秒数ごとに分割する(再エンコードしないため画質は元のまま)。
+   * 分割位置は必ずキーフレームに合わせるため、指定秒数ちょうどにはならない。
+   */
+  async function splitVideo(file, chunkSeconds, onProgress) {
+    const MP4Box = window.MP4Box;
+    if (!MP4Box || !MP4Box.createFile) throw new Error('分割用のライブラリを読み込めませんでした。ページを再読み込みしてください。');
+
+    const buf = await file.arrayBuffer();
+    onProgress && onProgress(0.05);
+
+    // --- 解析してサンプルを集める(mp4box は appendBuffer 中に同期的にコールバックする) ---
+    const mp4 = MP4Box.createFile();
+    const samplesByTrack = new Map();
+    let info = null, parseError = null;
+
+    mp4.onError = (e) => { parseError = e; };
+    mp4.onReady = (i) => {
+      info = i;
+      for (const t of i.tracks) {
+        samplesByTrack.set(t.id, []);
+        mp4.setExtractionOptions(t.id, null, { nbSamples: 1000 });
+      }
+      mp4.start();
+    };
+    mp4.onSamples = (id, user, samples) => {
+      const arr = samplesByTrack.get(id);
+      if (!arr) return;
+      for (const s of samples) {
+        arr.push({ dts: s.dts, cts: s.cts, duration: s.duration, size: s.size, is_sync: !!s.is_sync, data: s.data });
+      }
+    };
+
+    const ab = buf.slice(0);
+    ab.fileStart = 0;
+    mp4.appendBuffer(ab);
+    mp4.flush();
+    onProgress && onProgress(0.5);
+
+    if (parseError) throw new Error('この動画を解析できませんでした(MP4 / MOV 形式のみ対応しています)');
+    if (!info || !info.tracks || !info.tracks.length) {
+      throw new Error('この動画は分割に対応していません。MP4 または MOV 形式でお試しください。');
+    }
+    for (const t of info.tracks) {
+      if (!(samplesByTrack.get(t.id) || []).length) {
+        throw new Error('動画データを読み取れませんでした。別の動画でお試しください。');
+      }
+    }
+
+    // --- 初期化セグメント(ftyp + moov)を作る ---
+    for (const t of info.tracks) {
+      mp4.setSegmentOptions(t.id, null, { nbSamples: Number.MAX_SAFE_INTEGER });
+    }
+    mp4.onSegment = () => {};
+    const initBuffer = new Uint8Array(mp4.initializeSegmentation().buffer);
+
+    // --- 分割位置を決める(映像のキーフレーム基準) ---
+    const videoTrack = info.tracks.find((t) => t.type === 'video' || (t.video && t.video.width)) || info.tracks[0];
+    const vSamples = samplesByTrack.get(videoTrack.id);
+    const vTimescale = videoTrack.timescale;
+    const vStart = vSamples[0].dts;
+
+    const startIdx = [0];
+    let nextBoundary = chunkSeconds;
+    for (let i = 1; i < vSamples.length; i++) {
+      const t = (vSamples[i].dts - vStart) / vTimescale;
+      if (t >= nextBoundary && vSamples[i].is_sync) {
+        startIdx.push(i);
+        nextBoundary = t + chunkSeconds; // ずれを蓄積させない
+      }
+    }
+
+    // --- チャンクごとに組み立てる ---
+    const results = [];
+    for (let c = 0; c < startIdx.length; c++) {
+      const from = startIdx[c];
+      const to = (c + 1 < startIdx.length) ? startIdx[c + 1] : vSamples.length;
+      const isLast = (c === startIdx.length - 1);
+      const startTime = (vSamples[from].dts - vStart) / vTimescale;
+      const lastS = vSamples[vSamples.length - 1];
+      const endTime = to < vSamples.length
+        ? (vSamples[to].dts - vStart) / vTimescale
+        : (lastS.dts + lastS.duration - vStart) / vTimescale;
+
+      const parts = [initBuffer];
+      let seq = 1;
+      for (const t of info.tracks) {
+        const all = samplesByTrack.get(t.id);
+        let sel;
+        if (t.id === videoTrack.id) {
+          sel = all.slice(from, to);
+        } else {
+          // 映像の時間範囲に合わせて音声などを選ぶ。最終チャンクは末尾を取りこぼさない
+          const base = all[0].dts;
+          sel = all.filter((s) => {
+            const st = (s.dts - base) / t.timescale;
+            return st >= startTime - 1e-6 && (isLast || st < endTime - 1e-6);
+          });
+        }
+        if (!sel.length) continue;
+        const first = sel[0].dts;
+        const rebased = sel.map((s) => ({ ...s, dts: s.dts - first, cts: s.cts - first }));
+        parts.push(...buildFragment(t.id, seq++, rebased));
+      }
+
+      results.push({ blob: new Blob(parts, { type: 'video/mp4' }), start: startTime, end: endTime });
+      onProgress && onProgress(0.5 + 0.5 * ((c + 1) / startIdx.length));
+    }
+
+    return results;
+  }
+
+  window.splitVideo = splitVideo;
+})();
+</script>
 
 <script>
 (() => {
@@ -254,7 +490,8 @@
   let objectUrl = null;
   let duration = 0, srcW = 0, srcH = 0;
   let targetMB = 20, longEdge = 1280;
-  let mode = 'video', audioKbps = 96;
+  let mode = 'video', audioKbps = 96, splitSeconds = 30;
+  let splitUrls = [];
   let audioFile = null, mergeAudioEl = null, mergeAudioUrl = null;
   let videoSrcNode = null;
   let recorder = null, chunks = [], cancelled = false, ended = false;
@@ -318,6 +555,17 @@
 
   function updateEstimate() {
     if (!duration) return;
+    if (mode === 'split') {
+      const n = Math.max(1, Math.ceil(duration / splitSeconds));
+      const per = file.size / n;
+      let html = '推定: <b>約' + n + '本</b>(1本あたり ' + fmtSize(per) + ' 前後)/ 画質はそのまま';
+      html += '<br>※ 分割位置はキーフレームに合わせるため、' + splitSeconds + '秒ちょうどにはなりません。';
+      if (per > 30 * 1048576) {
+        html += '<br><span class="warn">⚠️ 1本が30MBを超えそうです。より短い長さを選ぶか、先に圧縮してください。</span>';
+      }
+      $('estimate').innerHTML = html;
+      return;
+    }
     if (mode === 'audio') {
       const estBytes = audioKbps * 1000 * duration / 8;
       let html = '推定: <b>' + fmtSize(estBytes) + '</b> 前後 / 音声のみ(' + audioKbps + ' kbps)';
@@ -404,6 +652,7 @@
   segHandler('segSize', 'mb', (v) => targetMB = v);
   segHandler('segRes', 'px', (v) => longEdge = v);
   segHandler('segAudioQ', 'kbps', (v) => audioKbps = v);
+  segHandler('segSplit', 'sec', (v) => splitSeconds = v);
 
   $('segMode').addEventListener('click', (e) => {
     const btn = e.target.closest('button');
@@ -412,11 +661,14 @@
     btn.classList.add('active');
     mode = btn.dataset.mode;
     const isAudio = mode === 'audio';
-    $('fsSize').classList.toggle('hidden', isAudio);
-    $('fsRes').classList.toggle('hidden', isAudio);
+    const isSplit = mode === 'split';
+    $('fsSize').classList.toggle('hidden', isAudio || isSplit);
+    $('fsRes').classList.toggle('hidden', isAudio || isSplit);
     $('fsAudioQ').classList.toggle('hidden', !isAudio);
     $('fsAudioFile').classList.toggle('hidden', mode !== 'merge');
-    $('btnStart').textContent = isAudio ? '音声を抽出' : (mode === 'merge' ? '音声を動画に合成' : '圧縮を開始');
+    $('fsSplit').classList.toggle('hidden', !isSplit);
+    $('btnStart').textContent = isAudio ? '音声を抽出'
+      : (mode === 'merge' ? '音声を動画に合成' : (isSplit ? '分割する' : '圧縮を開始'));
     updateEstimate();
   });
 
@@ -436,6 +688,8 @@
     audioFile = null;
     $('audioFileInput').value = '';
     $('audioFileName').textContent = '未選択';
+    splitUrls.forEach((u) => URL.revokeObjectURL(u));
+    splitUrls = [];
     $('file').value = '';
     resultBlob = null;
     clearError();
@@ -453,6 +707,7 @@
 
   async function startCompress() {
     clearError();
+    if (mode === 'split') { await runSplit(); return; }
     const isAudio = mode === 'audio';
     const mime = isAudio ? pickAudioMime() : pickMime();
     if (!mime) {
@@ -468,6 +723,7 @@
     ended = false;
     chunks = [];
     $('progTitle').textContent = isAudio ? '音声を抽出しています…' : (isMerge ? '合成しています…' : '圧縮しています…');
+    $('progHelp').innerHTML = '動画を再生しながら再エンコードするため、動画の長さと同じくらい時間がかかります。<br>この画面を開いたままお待ちください(画面ロックしないでください)。';
     show('progress');
 
     // 音声: video要素(+合成モードでは音声ファイル)→ AudioContext → MediaStream(スピーカーには出さない)
@@ -571,11 +827,97 @@
     requestAnimationFrame(progressLoop);
   }
 
+  // --- 分割(再エンコードなし) ---
+  async function runSplit() {
+    cancelled = false;
+    $('progTitle').textContent = '分割しています…';
+    $('progHelp').textContent = '再エンコードしないため短時間で終わります。この画面を開いたままお待ちください。';
+    $('prog').value = 0;
+    $('progText').textContent = '0%';
+    show('progress');
+    // 進捗表示を描画させてから重い処理に入る
+    await new Promise((r) => setTimeout(r, 50));
+
+    let parts;
+    try {
+      parts = await window.splitVideo(file, splitSeconds, (ratio) => {
+        const pct = Math.round(ratio * 100);
+        $('prog').value = pct;
+        $('progText').textContent = pct + '%';
+      });
+    } catch (e) {
+      showError(e.message || String(e));
+      show('settings');
+      return;
+    }
+    if (cancelled) return;
+
+    if (!parts.length) {
+      showError('分割できませんでした。別の動画でお試しください。');
+      show('settings');
+      return;
+    }
+    finishSplit(parts);
+  }
+
+  function finishSplit(parts) {
+    splitUrls.forEach((u) => URL.revokeObjectURL(u));
+    splitUrls = [];
+
+    $('doneTitle').textContent = '✅ ' + parts.length + '本に分割しました';
+    $('singleResult').classList.add('hidden');
+    $('splitResult').classList.remove('hidden');
+    $('doneHelp').textContent = 'iPhoneの場合:各ボタンを押すと「ファイル」アプリの「ダウンロード」フォルダに保存されます。1本ずつ順番に押してください。';
+
+    const over = parts.filter((p) => p.blob.size > 30 * 1048576).length;
+    const note = $('splitNote');
+    if (over === 0) {
+      note.textContent = 'すべてClaudeにアップロードできるサイズです 👍(画質は元のまま)';
+      note.className = 'result-note ok';
+    } else {
+      note.textContent = over + '本が30MBを超えています。より短い長さで分割し直すか、先に圧縮してください。';
+      note.className = 'result-note warn';
+    }
+
+    const base = (file.name.replace(/\.[^.]+$/, '') || 'video');
+    const list = $('splitList');
+    list.textContent = '';
+    parts.forEach((p, i) => {
+      const url = URL.createObjectURL(p.blob);
+      splitUrls.push(url);
+      const name = base + '_' + String(i + 1).padStart(2, '0') + '.mp4';
+
+      const row = document.createElement('div');
+      row.className = 'chunk';
+
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      const b = document.createElement('b');
+      b.textContent = (i + 1) + ' / ' + parts.length;
+      const span = document.createElement('span');
+      span.textContent = fmtTime(p.start) + ' 〜 ' + fmtTime(p.end) + ' ・ ' + fmtSize(p.blob.size);
+      meta.append(b, span);
+
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      a.textContent = '保存';
+      if (p.blob.size > 30 * 1048576) a.className = 'over';
+
+      row.append(meta, a);
+      list.appendChild(row);
+    });
+
+    show('done');
+  }
+
   function finish(mime) {
     resultBlob = new Blob(chunks, { type: mime.split(';')[0] });
     chunks = [];
     $('doneTitle').textContent = mode === 'audio' ? '✅ 音声の抽出が完了しました'
       : (mode === 'merge' ? '✅ 音声の合成が完了しました' : '✅ 圧縮が完了しました');
+    $('singleResult').classList.remove('hidden');
+    $('splitResult').classList.add('hidden');
     // 音声モードでは文字起こし(Colab)への導線を出す
     $('colabLink').classList.toggle('hidden', mode !== 'audio');
     $('resultSize').textContent = fmtSize(resultBlob.size);
