@@ -127,7 +127,27 @@
     font-weight: 600;
     text-decoration: none;
   }
-  .chunk a.over { background: var(--warn); }
+  .chunk a.over, .chunk button.over { background: var(--warn); }
+  .chunk button {
+    flex-shrink: 0;
+    padding: 9px 14px;
+    border: none;
+    border-radius: 9px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 0.88rem;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  .chunk .dl {
+    flex-shrink: 0;
+    padding: 9px 10px;
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid var(--border);
+    font-size: 0.95rem;
+  }
 
   progress { width: 100%; height: 10px; border-radius: 5px; accent-color: var(--accent); }
   #progText { font-size: 0.85rem; color: var(--muted); text-align: center; margin-top: 6px; font-variant-numeric: tabular-nums; }
@@ -256,6 +276,7 @@
     <p class="result-note" id="resultNote"></p>
     <div class="row" style="margin-top:8px;"><span class="label">元のサイズ</span><span class="value" id="resultOrig">—</span></div>
     <div class="row"><span class="label">削減率</span><span class="value" id="resultRatio">—</span></div>
+    <button class="btn hidden" id="btnShare">📤 保存先を選んで保存</button>
     <button class="btn" id="btnDownload">💾 ダウンロード</button>
     <a class="btn secondary hidden" id="colabLink" target="_blank" rel="noopener"
        href="https://colab.research.google.com/github/mameogalaxy/dougaayuku/blob/main/transcribe_colab.ipynb">📝 日本語文字起こし(SRT)をする</a>
@@ -263,12 +284,13 @@
 
   <div id="splitResult" class="hidden">
     <p class="result-note" id="splitNote"></p>
+    <button class="btn hidden" id="btnShareAll">📤 すべてまとめて保存</button>
     <div id="splitList"></div>
   </div>
 
   <button class="btn secondary" id="btnReset2">別の動画を圧縮する</button>
   <p style="font-size:.8rem; color:var(--muted); margin-top:10px;" id="doneHelp">
-    iPhoneの場合:ダウンロード後、「ファイル」アプリの「ダウンロード」フォルダに保存されます。Claudeアプリの📎からそのファイルを選んでアップロードできます。<br>
+    iPhoneの場合:「保存先を選んで保存」から<b>「"ファイル"に保存」</b>を選ぶと、好きなフォルダに保存できます(<b>「ビデオを保存」</b>なら写真アプリ)。「ダウンロード」は「ファイル」アプリの「ダウンロード」フォルダに保存されます。<br>
     文字起こしボタンはGoogle Colabを開きます。ダウンロードした音声をColab上でアップロードすると、faster-whisperによる日本語文字起こし(タイムスタンプ付きSRT)が実行されます。
   </p>
 </div>
@@ -538,6 +560,28 @@
     try { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) { window.scrollTo(0, 0); }
   }
   function clearError() { $('err').classList.add('hidden'); }
+
+  // --- 共有シート(iPhoneの「ファイルに保存」「ビデオを保存」)---
+  function toFile(blob, name) {
+    return new File([blob], name, { type: blob.type || 'application/octet-stream' });
+  }
+  function canShareFiles(files) {
+    try {
+      return !!(navigator.canShare && navigator.share && navigator.canShare({ files }));
+    } catch (e) { return false; }
+  }
+  // 共有はユーザー操作と同じ処理の中で呼ぶ必要があるため、File は呼び出し側で作る
+  async function shareFiles(files) {
+    try {
+      await navigator.share({ files });
+      return true;
+    } catch (e) {
+      // キャンセルはエラー扱いしない
+      if (e && (e.name === 'AbortError' || /abort|cancel/i.test(e.message || ''))) return true;
+      showError('保存できませんでした: ' + ((e && e.message) || e) + ' 「ダウンロード」からお試しください。');
+      return false;
+    }
+  }
 
   function firstSupported(candidates) {
     for (const c of candidates) {
@@ -901,7 +945,10 @@
     $('doneTitle').textContent = '✅ ' + parts.length + '本に分割しました';
     $('singleResult').classList.add('hidden');
     $('splitResult').classList.remove('hidden');
-    $('doneHelp').textContent = 'iPhoneの場合:各ボタンを押すと「ファイル」アプリの「ダウンロード」フォルダに保存されます。1本ずつ順番に押してください。';
+    $('doneHelp').innerHTML = 'iPhoneの場合:「保存」を押すと共有メニューが開きます。'
+      + '<b>「"ファイル"に保存」</b>で好きなフォルダを選べます('
+      + '<b>「ビデオを保存」</b>なら写真アプリに入ります)。<br>'
+      + '「⬇」は選択せずに「ダウンロード」フォルダへ保存します。';
 
     const over = parts.filter((p) => p.blob.size > 30 * 1048576).length;
     const note = $('splitNote');
@@ -914,12 +961,21 @@
     }
 
     const base = (file.name.replace(/\.[^.]+$/, '') || 'video');
+    const nameOf = (i) => base + '_' + String(i + 1).padStart(2, '0') + '.mp4';
+    const useShare = canShareFiles([toFile(parts[0].blob, nameOf(0))]);
+
+    // すべてまとめて保存(共有シートは複数ファイルをまとめて渡せる)
+    const allFiles = parts.map((p, i) => toFile(p.blob, nameOf(i)));
+    const canShareAll = parts.length > 1 && canShareFiles(allFiles);
+    $('btnShareAll').classList.toggle('hidden', !canShareAll);
+
     const list = $('splitList');
     list.textContent = '';
     parts.forEach((p, i) => {
       const url = URL.createObjectURL(p.blob);
       splitUrls.push(url);
-      const name = base + '_' + String(i + 1).padStart(2, '0') + '.mp4';
+      const name = nameOf(i);
+      const tooBig = p.blob.size > 30 * 1048576;
 
       const row = document.createElement('div');
       row.className = 'chunk';
@@ -931,16 +987,34 @@
       const span = document.createElement('span');
       span.textContent = fmtTime(p.start) + ' 〜 ' + fmtTime(p.end) + ' ・ ' + fmtSize(p.blob.size);
       meta.append(b, span);
+      row.append(meta);
+
+      if (useShare) {
+        // 保存先(フォルダ・写真アプリ)を選べる共有シートを開く
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = '保存';
+        if (tooBig) btn.className = 'over';
+        btn.addEventListener('click', () => shareFiles([toFile(p.blob, name)]));
+        row.append(btn);
+      }
 
       const a = document.createElement('a');
       a.href = url;
       a.download = name;
-      a.textContent = '保存';
-      if (p.blob.size > 30 * 1048576) a.className = 'over';
-
-      row.append(meta, a);
+      if (useShare) {
+        a.className = 'dl';
+        a.textContent = '⬇';
+        a.title = 'ダウンロードフォルダに保存';
+      } else {
+        a.textContent = '保存';
+        if (tooBig) a.className = 'over';
+      }
+      row.append(a);
       list.appendChild(row);
     });
+
+    $('btnShareAll').onclick = () => shareFiles(parts.map((p, i) => toFile(p.blob, nameOf(i))));
 
     show('done');
   }
@@ -952,6 +1026,8 @@
       : (mode === 'merge' ? '✅ 音声の合成が完了しました' : '✅ 圧縮が完了しました');
     $('singleResult').classList.remove('hidden');
     $('splitResult').classList.add('hidden');
+    // 共有シートが使える端末(iPhoneなど)では保存先を選べるボタンを出す
+    $('btnShare').classList.toggle('hidden', !canShareFiles([toFile(resultBlob, resultName())]));
     // 音声モードでは文字起こし(Colab)への導線を出す
     $('colabLink').classList.toggle('hidden', mode !== 'audio');
     $('resultSize').textContent = fmtSize(resultBlob.size);
@@ -969,12 +1045,21 @@
     show('done');
   }
 
+  function resultName() {
+    const base = (file.name.replace(/\.[^.]+$/, '') || 'video');
+    return base + (mode === 'audio' ? '_audio.' : (mode === 'merge' ? '_merged.' : '_compressed.')) + resultExt;
+  }
+
+  $('btnShare').addEventListener('click', () => {
+    if (!resultBlob) return;
+    shareFiles([toFile(resultBlob, resultName())]);
+  });
+
   $('btnDownload').addEventListener('click', () => {
     if (!resultBlob) return;
     const a = document.createElement('a');
     a.href = URL.createObjectURL(resultBlob);
-    const base = (file.name.replace(/\.[^.]+$/, '') || 'video');
-    a.download = base + (mode === 'audio' ? '_audio.' : (mode === 'merge' ? '_merged.' : '_compressed.')) + resultExt;
+    a.download = resultName();
     document.body.appendChild(a);
     a.click();
     setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
