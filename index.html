@@ -1139,11 +1139,6 @@
     $('doneTitle').textContent = '✅ ' + parts.length + '本に分割しました';
     $('singleResult').classList.add('hidden');
     $('splitResult').classList.remove('hidden');
-    $('doneHelp').innerHTML = 'iPhoneの場合:「保存」を押すと共有メニューが開きます。'
-      + '<b>「"ファイル"に保存」</b>で好きなフォルダを選べます('
-      + '<b>「ビデオを保存」</b>なら写真アプリに入ります)。<br>'
-      + '「⬇」は選択せずに「ダウンロード」フォルダへ保存します。';
-
     const over = parts.filter((p) => p.blob.size > 30 * 1048576).length;
     const note = $('splitNote');
     if (over === 0) {
@@ -1158,10 +1153,27 @@
     const nameOf = (i) => base + '_' + String(i + 1).padStart(2, '0') + '.mp4';
     const useShare = canShareFiles([toFile(parts[0].blob, nameOf(0))]);
 
-    // すべてまとめて保存(共有シートは複数ファイルをまとめて渡せる)
-    const allFiles = parts.map((p, i) => toFile(p.blob, nameOf(i)));
-    const canShareAll = parts.length > 1 && canShareFiles(allFiles);
+    // すべてまとめて保存。ただし大量・大容量を一度に共有シートへ渡すと
+    // iOSがメモリ不足で落ちるため、小さいときだけ出す
+    const totalBytes = parts.reduce((a, p) => a + p.blob.size, 0);
+    const SHARE_ALL_MAX_BYTES = 80 * 1048576;
+    const SHARE_ALL_MAX_FILES = 8;
+    const shareAllSafe = parts.length > 1
+      && parts.length <= SHARE_ALL_MAX_FILES
+      && totalBytes <= SHARE_ALL_MAX_BYTES;
+    const canShareAll = shareAllSafe && canShareFiles(parts.map((p, i) => toFile(p.blob, nameOf(i))));
     $('btnShareAll').classList.toggle('hidden', !canShareAll);
+
+    let help = 'iPhoneの場合:「保存」を押すと共有メニューが開きます。'
+      + '<b>「"ファイル"に保存」</b>で好きなフォルダを選べます('
+      + '<b>「ビデオを保存」</b>なら写真アプリに入ります)。<br>'
+      + '「⬇」は選択せずに「ダウンロード」フォルダへ保存します。';
+    if (useShare && !canShareAll && parts.length > 1) {
+      help += '<br><b>本数・容量が多いため「まとめて保存」は使えません</b>'
+            + '(一度に渡すとiPhoneの空きメモリが足りず、ページが再読み込みされてしまうため)。'
+            + 'お手数ですが1本ずつ保存してください。';
+    }
+    $('doneHelp').innerHTML = help;
 
     const list = $('splitList');
     list.textContent = '';
