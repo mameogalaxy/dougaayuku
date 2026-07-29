@@ -241,11 +241,12 @@
   </fieldset>
 
   <fieldset id="fsSplit" class="hidden">
-    <legend>1本あたりの長さ</legend>
+    <legend>1本あたりの大きさ / 長さ</legend>
     <div class="seg" id="segSplit">
-      <button data-sec="15">15秒</button>
-      <button data-sec="30" class="active">30秒<br><small>おすすめ</small></button>
-      <button data-sec="60">60秒</button>
+      <button data-split="size:26214400" class="active">約25MB<br><small>Claude用</small></button>
+      <button data-split="time:15">15秒</button>
+      <button data-split="time:30">30秒</button>
+      <button data-split="time:60">60秒</button>
     </div>
   </fieldset>
 
@@ -305,7 +306,9 @@
 
 <script src="vendor/mp4box.min.js"></script>
 <script>
-// ===== 再エンコードなしの時間分割(fragmented MP4 として書き出す) =====
+// ===== 再エンコードなしの分割(標準的なMP4として書き出す) =====
+// fragmented MP4 はiPhoneの標準プレイヤーで再生できないため、
+// stbl(サンプルテーブル)を持つ通常のMP4を組み立てる。
 (() => {
   'use strict';
 
@@ -313,84 +316,196 @@
     let len = 0;
     for (const p of payloads) len += p.byteLength;
     const out = new Uint8Array(8 + len);
-    const dv = new DataView(out.buffer);
-    dv.setUint32(0, out.length);
+    new DataView(out.buffer).setUint32(0, out.length);
     for (let i = 0; i < 4; i++) out[4 + i] = type.charCodeAt(i);
     let off = 8;
     for (const p of payloads) { out.set(p, off); off += p.byteLength; }
     return out;
   }
+  function fullBox(type, version, flags, ...payloads) {
+    return box(type, new Uint8Array([version, (flags >> 16) & 255, (flags >> 8) & 255, flags & 255]), ...payloads);
+  }
+  function zeros(n) { return new Uint8Array(n); }
   function u32(...vals) {
     const a = new Uint8Array(4 * vals.length);
     const dv = new DataView(a.buffer);
     vals.forEach((v, i) => dv.setUint32(4 * i, v >>> 0));
     return a;
   }
-  function i32(v) {
-    const a = new Uint8Array(4);
-    new DataView(a.buffer).setInt32(0, v | 0);
+  function i32(...vals) {
+    const a = new Uint8Array(4 * vals.length);
+    const dv = new DataView(a.buffer);
+    vals.forEach((v, i) => dv.setInt32(4 * i, v | 0));
     return a;
   }
-  function u64(v) {
-    const a = new Uint8Array(8);
-    new DataView(a.buffer).setBigUint64(0, BigInt(Math.max(0, Math.round(v))));
+  function u16(...vals) {
+    const a = new Uint8Array(2 * vals.length);
+    const dv = new DataView(a.buffer);
+    vals.forEach((v, i) => dv.setUint16(2 * i, v & 0xffff));
+    return a;
+  }
+  function ascii(s) {
+    const a = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i);
     return a;
   }
 
-  const SYNC_FLAGS = 0x02000000;     // キーフレーム
-  const NONSYNC_FLAGS = 0x01010000;  // それ以外
+  const IDENTITY_MATRIX = [0x10000, 0, 0, 0, 0x10000, 0, 0, 0, 0x40000000];
+  function matrixBytes(m) {
+    // 縦向き動画などの回転情報を保つため、元の行列をそのまま引き継ぐ
+    const src = (m && m.length === 9 && m.some((v) => v !== 0)) ? m : IDENTITY_MATRIX;
+    return i32(...src);
+  }
 
-  // 戻り値は Blob に渡す部品の配列。巨大な連結配列を作らないことでメモリを節約する
-  function buildFragment(trackId, seqNum, samples) {
-    const mfhd = box('mfhd', u32(0), u32(seqNum));
-    // default-base-is-moof のみ指定し、値は trun に持たせる
-    const tfhd = box('tfhd', new Uint8Array([0x00, 0x02, 0x00, 0x00]), u32(trackId));
-    const tfdt = box('tfdt', new Uint8Array([0x01, 0x00, 0x00, 0x00]), u64(0));
-
-    // data-offset + duration + size + flags + composition-offset
-    const trunFlags = 0x000f01;
-    const entries = new Uint8Array(16 * samples.length);
-    const edv = new DataView(entries.buffer);
-    let mdatSize = 0;
-    samples.forEach((s, i) => {
-      edv.setUint32(16 * i, s.duration >>> 0);
-      edv.setUint32(16 * i + 4, s.size >>> 0);
-      edv.setUint32(16 * i + 8, (s.is_sync ? SYNC_FLAGS : NONSYNC_FLAGS) >>> 0);
-      edv.setInt32(16 * i + 12, (s.cts - s.dts) | 0);
-      mdatSize += s.size;
+  // --- サンプルテーブル ---
+  function sttsBox(samples) {
+    const entries = [];
+    for (const s of samples) {
+      const last = entries[entries.length - 1];
+      if (last && last[1] === s.duration) last[0]++;
+      else entries.push([1, s.duration]);
+    }
+    const a = new Uint8Array(8 * entries.length);
+    const dv = new DataView(a.buffer);
+    entries.forEach((e, i) => { dv.setUint32(8 * i, e[0]); dv.setUint32(8 * i + 4, e[1]); });
+    return fullBox('stts', 0, 0, u32(entries.length), a);
+  }
+  function cttsBox(samples) {
+    const offsets = samples.map((s) => s.cts - s.dts);
+    if (offsets.every((o) => o === 0)) return null;
+    const entries = [];
+    for (const o of offsets) {
+      const last = entries[entries.length - 1];
+      if (last && last[1] === o) last[0]++;
+      else entries.push([1, o]);
+    }
+    const negative = offsets.some((o) => o < 0);
+    const a = new Uint8Array(8 * entries.length);
+    const dv = new DataView(a.buffer);
+    entries.forEach((e, i) => {
+      dv.setUint32(8 * i, e[0]);
+      if (negative) dv.setInt32(8 * i + 4, e[1]); else dv.setUint32(8 * i + 4, e[1]);
     });
-    const trunHeader = new Uint8Array(8);
-    const tdv = new DataView(trunHeader.buffer);
-    tdv.setUint32(0, (1 << 24) | trunFlags); // version=1(符号付きcomposition offset)
-    tdv.setUint32(4, samples.length);
-    const trun = box('trun', trunHeader, i32(0), entries);
+    return fullBox('ctts', negative ? 1 : 0, 0, u32(entries.length), a);
+  }
+  function stssBox(samples) {
+    const nums = [];
+    samples.forEach((s, i) => { if (s.is_sync) nums.push(i + 1); });
+    if (nums.length === samples.length) return null; // すべてキーフレームなら不要
+    return fullBox('stss', 0, 0, u32(nums.length), u32(...nums));
+  }
+  function stszBox(samples) {
+    return fullBox('stsz', 0, 0, u32(0), u32(samples.length), u32(...samples.map((s) => s.size)));
+  }
+  function hdlrBox(handler) {
+    const name = handler === 'vide' ? 'VideoHandler' : 'SoundHandler';
+    return fullBox('hdlr', 0, 0, u32(0), ascii(handler), zeros(12), ascii(name), zeros(1));
+  }
+  function dinfBox() {
+    return box('dinf', fullBox('dref', 0, 0, u32(1), fullBox('url ', 0, 1)));
+  }
 
-    const moof = box('moof', mfhd, box('traf', tfhd, tfdt, trun));
+  /**
+   * 1本分のMP4を組み立て、Blob に渡す部品の配列を返す。
+   * tracks: [{ id, handler, timescale, language, stsdRaw, tkhd:{width,height,matrix,layer}, samples }]
+   */
+  function buildMp4(tracks) {
+    const MOVIE_TIMESCALE = 1000;
+    const ftyp = box('ftyp', ascii('isom'), u32(512), ascii('isom'), ascii('iso2'), ascii('avc1'), ascii('mp41'));
 
-    // moof サイズ確定後に trun の data_offset を埋める
-    const dataOffsetPos = (moof.length - trun.length) + 8 + 8;
-    new DataView(moof.buffer).setInt32(dataOffsetPos, moof.length + 8);
+    const infos = tracks.map((t) => {
+      const mediaDuration = t.samples.reduce((a, s) => a + s.duration, 0);
+      return {
+        t,
+        mediaDuration,
+        bytesLen: t.samples.reduce((a, s) => a + s.size, 0),
+        movieDuration: Math.round(mediaDuration / t.timescale * MOVIE_TIMESCALE),
+      };
+    });
+    const movieDuration = Math.max.apply(null, infos.map((x) => x.movieDuration).concat([0]));
 
-    // mdat はヘッダだけ作り、中身はサンプルの配列をそのまま Blob に渡す
+    // moov の長さは chunk offset の「値」に依存しないため、
+    // 一度組んで長さを測り、正しい offset で組み直す
+    function makeMoov(offsets) {
+      const traks = infos.map((x, idx) => {
+        const t = x.t;
+        const isVideo = t.handler === 'vide';
+        const tkhd = fullBox('tkhd', 0, 3,
+          u32(0, 0, t.id, 0),
+          u32(x.movieDuration),
+          zeros(8),
+          u16(t.tkhd.layer || 0, 0),
+          u16(isVideo ? 0 : 0x0100, 0),
+          matrixBytes(t.tkhd.matrix),
+          u32(t.tkhd.width || 0, t.tkhd.height || 0));
+
+        const mdhd = fullBox('mdhd', 0, 0,
+          u32(0, 0, t.timescale, x.mediaDuration),
+          u16(t.language || 0x55c4, 0));
+
+        const mediaHeader = isVideo
+          ? fullBox('vmhd', 0, 1, u16(0, 0, 0, 0))
+          : fullBox('smhd', 0, 0, u16(0, 0));
+
+        const tables = [t.stsdRaw, sttsBox(t.samples)];
+        const ctts = cttsBox(t.samples);
+        if (ctts) tables.push(ctts);
+        if (isVideo) {
+          const stss = stssBox(t.samples);
+          if (stss) tables.push(stss);
+        }
+        tables.push(
+          fullBox('stsc', 0, 0, u32(1), u32(1, t.samples.length, 1)),
+          stszBox(t.samples),
+          fullBox('stco', 0, 0, u32(1), u32(offsets[idx])));
+
+        return box('trak', tkhd,
+          box('mdia', mdhd, hdlrBox(t.handler),
+            box('minf', mediaHeader, dinfBox(), box('stbl', ...tables))));
+      });
+
+      const mvhd = fullBox('mvhd', 0, 0,
+        u32(0, 0, MOVIE_TIMESCALE, movieDuration),
+        u32(0x00010000),        // rate 1.0
+        u16(0x0100, 0),         // volume 1.0
+        zeros(8),
+        matrixBytes(null),
+        zeros(24),
+        u32(Math.max.apply(null, tracks.map((t) => t.id)) + 1));
+
+      return box('moov', mvhd, ...traks);
+    }
+
+    const probe = makeMoov(infos.map(() => 0));
+    const mdatDataStart = ftyp.length + probe.length + 8;
+    const offsets = [];
+    let cursor = mdatDataStart;
+    for (const x of infos) { offsets.push(cursor); cursor += x.bytesLen; }
+
+    const moov = makeMoov(offsets);
+    if (moov.length !== probe.length) throw new Error('MP4の組み立てに失敗しました');
+
     const mdatHeader = new Uint8Array(8);
-    const mdv = new DataView(mdatHeader.buffer);
-    mdv.setUint32(0, 8 + mdatSize);
-    mdatHeader.set([0x6d, 0x64, 0x61, 0x74], 4);
+    new DataView(mdatHeader.buffer).setUint32(0, 8 + (cursor - mdatDataStart));
+    mdatHeader.set(ascii('mdat'), 4);
 
-    const parts = [moof, mdatHeader];
-    for (const s of samples) parts.push(s.data);
+    const parts = [ftyp, moov, mdatHeader];
+    for (const x of infos) {
+      for (const s of x.t.samples) parts.push(s.data);
+    }
     return parts;
   }
 
   /**
-   * 動画を指定秒数ごとに分割する(再エンコードしないため画質は元のまま)。
-   * 分割位置は必ずキーフレームに合わせるため、指定秒数ちょうどにはならない。
+   * 動画を分割する(再エンコードしないため画質は元のまま)。
+   * mode: 'time' なら value 秒ごと、'size' なら value バイトを目安に分割する。
+   * 分割位置は必ずキーフレームに合わせる。
    */
-  async function splitVideo(file, chunkSeconds, onProgress) {
+  async function splitVideo(file, mode, value, onProgress) {
     const MP4Box = window.MP4Box;
     if (!MP4Box || !MP4Box.createFile) throw new Error('分割用のライブラリを読み込めませんでした。ページを再読み込みしてください。');
 
-    const buf = await file.arrayBuffer();
+    let buf = await file.arrayBuffer();
     onProgress && onProgress(0.05);
 
     // --- 解析してサンプルを集める(mp4box は appendBuffer 中に同期的にコールバックする) ---
@@ -405,7 +520,7 @@
     mp4.onReady = (i) => {
       info = i;
       // iPhoneの動画にはメタデータtrackが含まれることがある。映像と音声だけを扱う
-      for (const t of i.tracks.filter((t) => isVideo(t) || isAudio(t))) {
+      for (const t of i.tracks.filter((x) => isVideo(x) || isAudio(x))) {
         samplesByTrack.set(t.id, []);
         mp4.setExtractionOptions(t.id, null, { nbSamples: 1000 });
       }
@@ -429,39 +544,97 @@
       throw new Error('この動画は分割に対応していません。MP4 または MOV 形式でお試しください。');
     }
 
-    // 実際にデータが取れたトラックだけを対象にする
-    const tracks = info.tracks.filter((t) => (samplesByTrack.get(t.id) || []).length > 0);
-    const videoTrack = tracks.find(isVideo);
+    // --- トラックごとの設定(コーデック情報や回転情報)を元ファイルから引き継ぐ ---
+    const dv = new DataView(buf);
+    const tracks = [];
+    for (const t of info.tracks) {
+      const samples = samplesByTrack.get(t.id);
+      if (!samples || !samples.length) continue;
+      const trak = mp4.moov.traks.find((x) => x.tkhd.track_id === t.id);
+      if (!trak) continue;
+      const stsdStart = trak.mdia.minf.stbl.stsd.start;
+      const stsdSize = dv.getUint32(stsdStart);
+      tracks.push({
+        id: t.id,
+        handler: trak.mdia.hdlr.handler,
+        timescale: trak.mdia.mdhd.timescale,
+        language: trak.mdia.mdhd.language,
+        // stsd はコーデック設定(avcC / hvcC / esds)を含むのでそのまま複製する
+        stsdRaw: new Uint8Array(buf, stsdStart, stsdSize).slice(),
+        tkhd: {
+          width: trak.tkhd.width, height: trak.tkhd.height,
+          matrix: Array.from(trak.tkhd.matrix || []), layer: trak.tkhd.layer,
+        },
+        samples,
+      });
+    }
+
+    const videoTrack = tracks.find((t) => t.handler === 'vide');
     if (!videoTrack) {
-      const kinds = info.tracks.map((t) => t.type || (t.video ? 'video' : (t.audio ? 'audio' : '?'))).join(', ');
+      const kinds = info.tracks.map((t) => t.type || '?').join(', ');
       throw new Error('映像トラックを読み取れませんでした(検出されたトラック: ' + (kinds || 'なし') + ')。'
         + 'MP4 / MOV 形式の動画でお試しください。');
     }
 
-    // サンプルは別途コピー済みなので、mp4box が抱えている元データを解放してメモリを空ける
+    // サンプルは複製済みなので、元データを手放してメモリを空ける
     for (const t of tracks) {
-      try { mp4.releaseUsedSamples(t.id, samplesByTrack.get(t.id).length); } catch (e) { /* 解放できなくても続行 */ }
+      try { mp4.releaseUsedSamples(t.id, t.samples.length); } catch (e) { /* 解放できなくても続行 */ }
     }
+    buf = null;
 
-    // --- 初期化セグメント(ftyp + moov)を作る ---
-    for (const t of tracks) {
-      mp4.setSegmentOptions(t.id, null, { nbSamples: Number.MAX_SAFE_INTEGER });
-    }
-    mp4.onSegment = () => {};
-    const initBuffer = new Uint8Array(mp4.initializeSegmentation().buffer);
-
-    // --- 分割位置を決める(映像のキーフレーム基準) ---
-    const vSamples = samplesByTrack.get(videoTrack.id);
+    const vSamples = videoTrack.samples;
     const vTimescale = videoTrack.timescale;
     const vStart = vSamples[0].dts;
+    const timeOf = (i) => (vSamples[i].dts - vStart) / vTimescale;
 
+    // --- 分割位置(必ずキーフレーム)を決める ---
     const startIdx = [0];
-    let nextBoundary = chunkSeconds;
-    for (let i = 1; i < vSamples.length; i++) {
-      const t = (vSamples[i].dts - vStart) / vTimescale;
-      if (t >= nextBoundary && vSamples[i].is_sync) {
-        startIdx.push(i);
-        nextBoundary = t + chunkSeconds; // ずれを蓄積させない
+    if (mode === 'size') {
+      // 映像の累積サイズ
+      const vCum = new Array(vSamples.length + 1);
+      vCum[0] = 0;
+      for (let i = 0; i < vSamples.length; i++) vCum[i + 1] = vCum[i] + vSamples[i].size;
+
+      // 音声の累積サイズ(時刻で引く。問い合わせる時刻は常に増えるので前進のみ)
+      const audioCum = tracks.filter((t) => t !== videoTrack).map((t) => {
+        const base = t.samples[0].dts;
+        const times = [], cum = [0];
+        t.samples.forEach((s, i) => { times.push((s.dts - base) / t.timescale); cum.push(cum[i] + s.size); });
+        return { times, cum, ptr: 0 };
+      });
+      const audioBytesUpTo = (time) => {
+        let total = 0;
+        for (const a of audioCum) {
+          while (a.ptr < a.times.length && a.times[a.ptr] < time) a.ptr++;
+          total += a.cum[a.ptr];
+        }
+        return total;
+      };
+
+      // 切れるのはキーフレームのみ。目標を超えない範囲で最も遠いキーフレームを選ぶ
+      const keys = [];
+      for (let i = 1; i < vSamples.length; i++) if (vSamples[i].is_sync) keys.push(i);
+
+      let from = 0, aFrom = 0, ki = 0;
+      while (ki < keys.length) {
+        const sizeAt = (k) => (vCum[k] - vCum[from]) + (audioBytesUpTo(timeOf(k)) - aFrom);
+        let best = -1;
+        while (ki < keys.length && sizeAt(keys[ki]) <= value) { best = keys[ki]; ki++; }
+        // 最初のキーフレームだけで目標を超える場合は、やむを得ずそこで切る
+        if (best === -1) { best = keys[ki]; ki++; }
+        if (best === undefined || best <= from) break;
+        startIdx.push(best);
+        from = best;
+        aFrom = audioBytesUpTo(timeOf(best));
+      }
+    } else {
+      let nextBoundary = value;
+      for (let i = 1; i < vSamples.length; i++) {
+        const t = timeOf(i);
+        if (t >= nextBoundary && vSamples[i].is_sync) {
+          startIdx.push(i);
+          nextBoundary = t + value; // ずれを蓄積させない
+        }
       }
     }
 
@@ -471,40 +644,39 @@
       const from = startIdx[c];
       const to = (c + 1 < startIdx.length) ? startIdx[c + 1] : vSamples.length;
       const isLast = (c === startIdx.length - 1);
-      const startTime = (vSamples[from].dts - vStart) / vTimescale;
+      const startTime = timeOf(from);
       const lastS = vSamples[vSamples.length - 1];
       const endTime = to < vSamples.length
-        ? (vSamples[to].dts - vStart) / vTimescale
+        ? timeOf(to)
         : (lastS.dts + lastS.duration - vStart) / vTimescale;
 
-      const parts = [initBuffer];
+      const chunkTracks = [];
       const used = [];
-      let seq = 1;
       for (const t of tracks) {
-        const all = samplesByTrack.get(t.id);
         let sel;
-        if (t.id === videoTrack.id) {
-          sel = all.slice(from, to);
+        if (t === videoTrack) {
+          sel = t.samples.slice(from, to);
         } else {
           // 映像の時間範囲に合わせて音声などを選ぶ。最終チャンクは末尾を取りこぼさない
-          const base = all[0].dts;
-          sel = all.filter((s) => {
+          const base = t.samples[0].dts;
+          sel = t.samples.filter((s) => {
             const st = (s.dts - base) / t.timescale;
             return st >= startTime - 1e-6 && (isLast || st < endTime - 1e-6);
           });
         }
         if (!sel.length) continue;
-        const first = sel[0].dts;
-        const rebased = sel.map((s) => ({
-          data: s.data, size: s.size, duration: s.duration, is_sync: s.is_sync,
-          dts: s.dts - first, cts: s.cts - first,
-        }));
-        // 要素数が多くなるため spread は使わない(引数の上限に達する恐れがある)
-        for (const p of buildFragment(t.id, seq++, rebased)) parts.push(p);
+        chunkTracks.push({
+          id: t.id, handler: t.handler, timescale: t.timescale, language: t.language,
+          stsdRaw: t.stsdRaw, tkhd: t.tkhd, samples: sel,
+        });
         for (const s of sel) used.push(s);
       }
 
-      results.push({ blob: new Blob(parts, { type: 'video/mp4' }), start: startTime, end: endTime });
+      results.push({
+        blob: new Blob(buildMp4(chunkTracks), { type: 'video/mp4' }),
+        start: startTime,
+        end: endTime,
+      });
       // Blob に取り込んだサンプルは解放してメモリを抑える
       for (const s of used) s.data = null;
       onProgress && onProgress(0.5 + 0.5 * ((c + 1) / startIdx.length));
@@ -533,8 +705,10 @@
   let objectUrl = null;
   let duration = 0, srcW = 0, srcH = 0;
   let targetMB = 20, longEdge = 1280;
-  let mode = 'video', audioKbps = 96, splitSeconds = 30;
+  let mode = 'video', audioKbps = 96;
+  let splitMode = 'size', splitValue = 26214400;
   let splitUrls = [];
+  let sharing = false;
   let audioFile = null, mergeAudioEl = null, mergeAudioUrl = null;
   let videoSrcNode = null;
   let recorder = null, chunks = [], cancelled = false, ended = false;
@@ -572,14 +746,19 @@
   }
   // 共有はユーザー操作と同じ処理の中で呼ぶ必要があるため、File は呼び出し側で作る
   async function shareFiles(files) {
+    // iOSは共有シートを同時に1つしか開けないため、重複呼び出しを防ぐ
+    if (sharing) return false;
+    sharing = true;
     try {
       await navigator.share({ files });
       return true;
     } catch (e) {
       // キャンセルはエラー扱いしない
       if (e && (e.name === 'AbortError' || /abort|cancel/i.test(e.message || ''))) return true;
-      showError('保存できませんでした: ' + ((e && e.message) || e) + ' 「ダウンロード」からお試しください。');
+      showError('保存できませんでした: ' + ((e && e.message) || e) + ' 「⬇」からお試しください。');
       return false;
+    } finally {
+      sharing = false;
     }
   }
 
@@ -623,12 +802,18 @@
   function updateEstimate() {
     if (!duration) return;
     if (mode === 'split') {
-      const n = Math.max(1, Math.ceil(duration / splitSeconds));
+      const n = splitMode === 'size'
+        ? Math.max(1, Math.ceil(file.size / splitValue))
+        : Math.max(1, Math.ceil(duration / splitValue));
       const per = file.size / n;
-      let html = '推定: <b>約' + n + '本</b>(1本あたり ' + fmtSize(per) + ' 前後)/ 画質はそのまま';
-      html += '<br>※ 分割位置はキーフレームに合わせるため、' + splitSeconds + '秒ちょうどにはなりません。';
+      let html = '推定: <b>約' + n + '本</b>(1本あたり ' + fmtSize(per) + ' / '
+               + fmtTime(duration / n) + ' 前後)/ 画質はそのまま';
+      html += splitMode === 'size'
+        ? '<br>※ 分割位置はキーフレームに合わせるため、大きさは目安です。'
+        : '<br>※ 分割位置はキーフレームに合わせるため、' + splitValue + '秒ちょうどにはなりません。';
       if (per > 30 * 1048576) {
-        html += '<br><span class="warn">⚠️ 1本が30MBを超えそうです。より短い長さを選ぶか、先に圧縮してください。</span>';
+        html += '<br><span class="warn">⚠️ 1本が30MBを超えそうです。「約25MB」を選ぶと'
+             + 'Claudeにアップロードできる大きさに分割できます。</span>';
       }
       if (file.size > 400 * 1048576) {
         html += '<br><span class="warn">⚠️ ファイルが大きいため、端末のメモリ不足で失敗することがあります。'
@@ -723,7 +908,16 @@
   segHandler('segSize', 'mb', (v) => targetMB = v);
   segHandler('segRes', 'px', (v) => longEdge = v);
   segHandler('segAudioQ', 'kbps', (v) => audioKbps = v);
-  segHandler('segSplit', 'sec', (v) => splitSeconds = v);
+  $('segSplit').addEventListener('click', (e) => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    $('segSplit').querySelectorAll('button').forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active');
+    const [m, v] = btn.dataset.split.split(':');
+    splitMode = m;
+    splitValue = Number(v);
+    updateEstimate();
+  });
 
   $('segMode').addEventListener('click', (e) => {
     const btn = e.target.closest('button');
@@ -911,7 +1105,7 @@
 
     let parts;
     try {
-      parts = await window.splitVideo(file, splitSeconds, (ratio) => {
+      parts = await window.splitVideo(file, splitMode, splitValue, (ratio) => {
         const pct = Math.round(ratio * 100);
         $('prog').value = pct;
         $('progText').textContent = pct + '%';
