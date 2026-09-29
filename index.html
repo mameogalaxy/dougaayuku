@@ -448,12 +448,27 @@
     const MOVIE_TIMESCALE = 1000;
     const ftyp = box('ftyp', ascii('isom'), u32(512), ascii('isom'), ascii('iso2'), ascii('avc1'), ascii('mp41'));
 
-    const infos = tracks.map((t) => {
+    // 映像と音声を約0.5秒ずつ交互に並べる(インターリーブ)。
+    // 映像の後ろに音声をまとめて置くと、iPhoneの再生エンジンがデータ待ちで止まることがあるため
+    const CHUNK_SEC = 0.5;
+    const infos = tracks.map((t, trackIdx) => {
       const mediaDuration = t.samples.reduce((a, s) => a + s.duration, 0);
+      const base = t.samples[0].dts;
+      const chunks = [];
+      let cur = null;
+      t.samples.forEach((smp, i) => {
+        const time = (smp.dts - base) / t.timescale;
+        if (!cur || time >= cur.start + CHUNK_SEC) {
+          cur = { trackIdx, first: i, count: 0, start: time, bytes: 0, offset: 0 };
+          chunks.push(cur);
+        }
+        cur.count++;
+        cur.bytes += smp.size;
+      });
       return {
         t,
         mediaDuration,
-        bytesLen: t.samples.reduce((a, s) => a + s.size, 0),
+        chunks,
         movieDuration: Math.round(mediaDuration / t.timescale * MOVIE_TIMESCALE),
       };
     });
@@ -489,10 +504,15 @@
           const stss = stssBox(t.samples);
           if (stss) tables.push(stss);
         }
+        // stsc: 1チャンクあたりのサンプル数が変わるところだけ記録する
+        const stsc = [];
+        x.chunks.forEach((c, i) => {
+          if (!stsc.length || stsc[stsc.length - 1][1] !== c.count) stsc.push([i + 1, c.count, 1]);
+        });
         tables.push(
-          fullBox('stsc', 0, 0, u32(1), u32(1, t.samples.length, 1)),
+          fullBox('stsc', 0, 0, u32(stsc.length), u32(...[].concat(...stsc))),
           stszBox(t.samples),
-          fullBox('stco', 0, 0, u32(1), u32(offsets[idx])));
+          fullBox('stco', 0, 0, u32(x.chunks.length), u32(...offsets[idx])));
 
         return box('trak', tkhd,
           box('mdia', mdhd, hdlrBox(t.handler),
@@ -511,11 +531,16 @@
       return box('moov', mvhd, ...traks);
     }
 
-    const probe = makeMoov(infos.map(() => 0));
+    // mdat に書く順番: 全トラックのチャンクを開始時刻順に並べる(同時刻なら映像を先に)
+    const order = [].concat(...infos.map((x) => x.chunks)).sort((a, b) =>
+      (a.start - b.start) || (infos[a.trackIdx].t.handler === 'vide' ? -1 : 1));
+
+    const probe = makeMoov(infos.map((x) => x.chunks.map(() => 0)));
     const mdatDataStart = ftyp.length + probe.length + 8;
-    const offsets = [];
     let cursor = mdatDataStart;
-    for (const x of infos) { offsets.push(cursor); cursor += x.bytesLen; }
+    for (const c of order) { c.offset = cursor; cursor += c.bytes; }
+    if (cursor > 0xffffffff) throw new Error('1本が大きすぎます(4GB超)。もっと小さく分割してください。');
+    const offsets = infos.map((x) => x.chunks.map((c) => c.offset));
 
     const moov = makeMoov(offsets);
     if (moov.length !== probe.length) throw new Error('MP4の組み立てに失敗しました');
@@ -525,8 +550,9 @@
     mdatHeader.set(ascii('mdat'), 4);
 
     const parts = [ftyp, moov, mdatHeader];
-    for (const x of infos) {
-      for (const s of x.t.samples) parts.push(s.data);
+    for (const c of order) {
+      const samples = infos[c.trackIdx].t.samples;
+      for (let i = c.first; i < c.first + c.count; i++) parts.push(samples[i].data);
     }
     return parts;
   }
@@ -1475,6 +1501,11 @@
     } catch (e) {
       if (e === CANCEL || r.cancelled) {
         job.status = 'pending'; // 中止した動画は待機に戻す(あとで再開できる)
+      } else if (e && e.stall && !job.retried) {
+        // 再生が止まった動画は、ほかの動画のあとで1回だけやり直す
+        job.retried = true;
+        job.status = 'pending';
+        jobs = jobs.filter((x) => x !== job).concat([job]);
       } else {
         job.status = 'error';
         job.error = friendlyError(e);
@@ -1656,7 +1687,11 @@
       videoJob = null; // 再生済みなので、次回は読み込み直す
     }
     checkAbort(r);
-    if (wd.failMsg) throw new UserError(wd.failMsg);
+    if (wd.failMsg) {
+      const err = new UserError(wd.failMsg);
+      err.stall = true;
+      throw err;
+    }
     return [{ blob: new Blob(chunks, { type: mime.split(';')[0] }), ext }];
   }
 
