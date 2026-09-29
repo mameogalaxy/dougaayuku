@@ -290,6 +290,7 @@
     動画を再生しながら再エンコードするため、動画の長さと同じくらい時間がかかります。<br>
     この画面を開いたままお待ちください(画面ロックしないでください)。
   </p>
+  <button class="btn secondary" id="btnSkip">この動画をスキップして次へ</button>
   <button class="btn secondary" id="btnCancel">中止</button>
 </div>
 
@@ -721,9 +722,18 @@
   const LIMIT = 30 * 1048576;               // Claudeにアップロードできる目安
   const SHARE_ALL_MAX_BYTES = 80 * 1048576; // 共有シートへ一度に渡してよい上限(iOSのメモリ対策)
   const SHARE_ALL_MAX_FILES = 8;
+  // 再生が止まったときの扱い(ミリ秒)
+  const STALL_NOTICE_MS = 4000;  // この時間進まなければ「止まっています」と表示して再開を試す
+  const STALL_RETRY_MS = 5000;   // 再開を試す間隔
+  const STALL_FAIL_MS = 20000;   // この時間進まなければ、その動画は失敗として次へ進む
 
   class UserError extends Error {}
   const CANCEL = new Error('cancelled');
+  // 中止・スキップの要求が来ていたら処理を抜ける
+  function checkAbort(r) {
+    if (r.cancelled) throw CANCEL;
+    if (r.skip) throw new UserError('スキップしました。');
+  }
 
   // --- 画面で選択中の設定 ---
   let targetMB = 20, longEdge = 1280, mode = 'video', audioKbps = 96;
@@ -1047,6 +1057,7 @@
       ? (finished + 1) + ' / ' + total + ' 本目を' + verb + 'しています…'
       : verb + 'しています…';
     $('progFile').textContent = cur.file.name;
+    $('btnSkip').classList.toggle('hidden', batch.mode === 'split');
     $('progHelp').innerHTML = batch.mode === 'split'
       ? '再エンコードしないため短時間で終わります。この画面を開いたままお待ちください。'
       : '動画を再生しながら再エンコードするため、動画の長さと同じくらい時間がかかります(複数の場合は合計)。<br>'
@@ -1333,6 +1344,14 @@
   $('btnReset2').addEventListener('click', confirmReset);
   $('btnResults').addEventListener('click', () => showDone());
 
+  // 今の動画だけをあきらめて、次の動画へ進む
+  $('btnSkip').addEventListener('click', () => {
+    if (!run) return;
+    run.skip = true;
+    if (run.tok) run.tok.stop = true;
+    stopMedia();
+  });
+
   $('btnCancel').addEventListener('click', () => {
     if (!run) return;
     run.cancelled = true;
@@ -1346,6 +1365,10 @@
     if (!audioCtx) {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       videoSrcNode = audioCtx.createMediaElementSource(video);
+      // 音声処理が止まると動画の再生も止まってしまうため、止まったら再開させる
+      audioCtx.onstatechange = () => {
+        if (run && audioCtx.state !== 'running') { try { audioCtx.resume(); } catch (e) {} }
+      };
     }
     audioCtx.resume();
   }
@@ -1385,7 +1408,7 @@
 
   async function runQueue() {
     if (run) return;
-    const r = { id: nextRunId++, cancelled: false, tok: null };
+    const r = { id: nextRunId++, cancelled: false, skip: false, tok: null };
     run = r;
     show('progress');
     $('prog').value = 0;
@@ -1414,6 +1437,7 @@
     job.pct = 0;
     job._key = null;
     job.runId = r.id;
+    r.skip = false;
     $('prog').value = 0;
     $('progText').textContent = '0%';
     renderQueues();
@@ -1444,11 +1468,48 @@
     }
   }
 
-  function progressLoop(tok, job, duration) {
+  // 再生を再開させる(止まったときの復旧)
+  function recoverPlayback() {
+    try { if (audioCtx && audioCtx.state !== 'running') audioCtx.resume(); } catch (e) {}
+    try {
+      if (!video.paused) video.pause();
+      video.play().catch(() => {});
+    } catch (e) {}
+    if (mergeAudioEl && mergeAudioEl.paused) { try { mergeAudioEl.play().catch(() => {}); } catch (e) {} }
+  }
+
+  function stallMessage() {
+    return '再生が止まったため、この動画は中止しました(端末の負荷が高いか、動画の形式が合わない可能性があります)。'
+      + '動画を短く分割するか、解像度を下げてお試しください。'
+      + '[状態: 再生=' + (video.paused ? '停止' : '再生中') + ' / 読込=' + video.readyState
+      + ' / 音声処理=' + (audioCtx ? audioCtx.state : 'なし')
+      + ' / ' + video.videoWidth + '×' + video.videoHeight + ']';
+  }
+
+  // 進み具合を表示しつつ、再生が止まっていないか見張る
+  function progressLoop(tok, job, duration, wd) {
     if (tok.stop) return;
-    const pct = Math.min(100, video.currentTime / duration * 100);
-    setJobProgress(job, pct, '(' + fmtTime(video.currentTime) + ' / ' + fmtTime(duration) + ')');
-    requestAnimationFrame(() => progressLoop(tok, job, duration));
+    const now = performance.now();
+    const t = video.currentTime;
+    if (document.hidden || video.ended) {
+      wd.lastAt = now; // 画面を離れている間や終了直前は判定しない
+    } else if (t > wd.lastT + 0.02) {
+      wd.lastT = t; wd.lastAt = now; wd.retryAt = 0;
+    }
+    let extra = '(' + fmtTime(t) + ' / ' + fmtTime(duration) + ')';
+    const idle = now - wd.lastAt;
+    if (idle > STALL_NOTICE_MS) {
+      extra += ' ⚠️ 進みが止まっています…再開を試しています';
+      if (now - wd.retryAt > STALL_RETRY_MS) { wd.retryAt = now; recoverPlayback(); }
+      if (idle > STALL_FAIL_MS) {
+        wd.failMsg = stallMessage();
+        tok.stop = true;
+        stopMedia(); // 録画が止まり、呼び出し元でエラーとして扱われる
+        return;
+      }
+    }
+    setJobProgress(job, Math.min(100, t / duration * 100), extra);
+    requestAnimationFrame(() => progressLoop(tok, job, duration, wd));
   }
 
   // 圧縮・音声抽出・音声合成: 動画を再生しながら録画する
@@ -1469,9 +1530,10 @@
       swapVideoUrl(meta.url);
     }
     videoJob = job;
-    if (r.cancelled) throw CANCEL;
+    checkAbort(r);
 
     const tok = { stop: false };
+    const wd = { lastT: -1, lastAt: performance.now(), retryAt: 0, failMsg: '' };
     r.tok = tok;
 
     // 音声: video要素(+合成モードでは音声ファイル)→ AudioContext → MediaStream(スピーカーには出さない)
@@ -1494,7 +1556,7 @@
     } catch (e) {
       // 音声の取得に失敗しても映像のみで続行(音声抽出・合成では下でエラーにする)
     }
-    if (r.cancelled) throw CANCEL;
+    checkAbort(r);
     if (isMerge && !mergeAudioEl) {
       throw new UserError('音声ファイルを読み込めませんでした。別の形式(.m4a / .mp3 など)でお試しください。');
     }
@@ -1542,10 +1604,11 @@
         video.pause();
         throw new UserError('再生を開始できませんでした: ' + e.message);
       }
-      if (r.cancelled) throw CANCEL;
+      checkAbort(r);
+      wd.lastAt = performance.now();
       rec.start(1000);
       if (!isAudio) drawLoop(tok);
-      progressLoop(tok, job, meta.duration);
+      progressLoop(tok, job, meta.duration, wd);
       video.onended = () => {
         tok.stop = true;
         if (mergeAudioEl) mergeAudioEl.pause();
@@ -1562,7 +1625,8 @@
       recorder = null;
       videoJob = null; // 再生済みなので、次回は読み込み直す
     }
-    if (r.cancelled) throw CANCEL;
+    checkAbort(r);
+    if (wd.failMsg) throw new UserError(wd.failMsg);
     return [{ blob: new Blob(chunks, { type: mime.split(';')[0] }), ext }];
   }
 
