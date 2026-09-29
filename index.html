@@ -169,7 +169,24 @@
     white-space: pre-line;
   }
   footer { text-align: center; color: var(--muted); font-size: 0.78rem; padding: 12px 0 24px; }
-  canvas, video#src, video#probe { display: none; }
+  canvas, video#probe { display: none; }
+  /* 処理中の動画。iPhoneは画面に見えていない動画の再生を止めてしまうため、処理中は隅に表示する */
+  video#src { display: none; }
+  video#src.preview {
+    display: block;
+    position: fixed;
+    z-index: 50;
+    top: calc(env(safe-area-inset-top, 0px) + 10px);
+    right: 10px;
+    width: 26vw;
+    max-width: 150px;
+    max-height: 38vh;
+    object-fit: contain;
+    background: #000;
+    border-radius: 10px;
+    box-shadow: 0 4px 16px rgba(0,0,0,.3);
+    pointer-events: none;
+  }
   #inputHost { display: none; }
 
   /* 動画のキュー */
@@ -281,6 +298,7 @@
   <p id="progFile"></p>
   <progress id="prog" max="100" value="0"></progress>
   <div id="progText">0%</div>
+  <button class="btn hidden" id="btnKick">▶ 止まっています。タップして再開</button>
 
   <div class="qhead" style="margin-top:16px;"><b>順番待ちの動画</b><span id="progOverall"></span></div>
   <div class="queue" id="progQueue"></div>
@@ -725,7 +743,7 @@
   // 再生が止まったときの扱い(ミリ秒)
   const STALL_NOTICE_MS = 4000;  // この時間進まなければ「止まっています」と表示して再開を試す
   const STALL_RETRY_MS = 5000;   // 再開を試す間隔
-  const STALL_FAIL_MS = 20000;   // この時間進まなければ、その動画は失敗として次へ進む
+  const STALL_FAIL_MS = 30000;   // この時間進まなければ、その動画は失敗として次へ進む
 
   class UserError extends Error {}
   const CANCEL = new Error('cancelled');
@@ -1310,6 +1328,8 @@
 
   // ===== やり直し・中止 =====
   function stopMedia() {
+    video.classList.remove('preview');
+    $('btnKick').classList.add('hidden');
     try { video.pause(); } catch (e) {}
     if (mergeAudioEl) { try { mergeAudioEl.pause(); } catch (e) {} }
     if (recorder && recorder.state !== 'inactive') { try { recorder.stop(); } catch (e) {} }
@@ -1343,6 +1363,11 @@
   $('btnReset1').addEventListener('click', confirmReset);
   $('btnReset2').addEventListener('click', confirmReset);
   $('btnResults').addEventListener('click', () => showDone());
+
+  // 止まったときの手動再開。タップ操作の中で再生し直す
+  $('btnKick').addEventListener('click', () => {
+    recoverPlayback();
+  });
 
   // 今の動画だけをあきらめて、次の動画へ進む
   $('btnSkip').addEventListener('click', () => {
@@ -1498,7 +1523,9 @@
     }
     let extra = '(' + fmtTime(t) + ' / ' + fmtTime(duration) + ')';
     const idle = now - wd.lastAt;
-    if (idle > STALL_NOTICE_MS) {
+    const stalled = idle > STALL_NOTICE_MS;
+    if (stalled !== wd.kick) { wd.kick = stalled; $('btnKick').classList.toggle('hidden', !stalled); }
+    if (stalled) {
       extra += ' ⚠️ 進みが止まっています…再開を試しています';
       if (now - wd.retryAt > STALL_RETRY_MS) { wd.retryAt = now; recoverPlayback(); }
       if (idle > STALL_FAIL_MS) {
@@ -1593,6 +1620,7 @@
     });
 
     try {
+      video.classList.add('preview');
       video.currentTime = 0;
       try {
         await video.play();
@@ -1619,6 +1647,8 @@
     } finally {
       tok.stop = true;
       video.onended = null;
+      video.classList.remove('preview');
+      $('btnKick').classList.add('hidden');
       try { video.pause(); } catch (e) {}
       if (mergeAudioEl) { try { mergeAudioEl.pause(); } catch (e) {} }
       if (rec.state !== 'inactive') { try { rec.stop(); } catch (e) {} }
