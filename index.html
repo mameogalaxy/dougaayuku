@@ -115,7 +115,7 @@
   }
   .chunk:last-child { border-bottom: none; }
   .chunk .meta { flex: 1; min-width: 0; }
-  .chunk .meta b { font-size: 0.95rem; word-break: break-all; }
+  .chunk .meta b { font-size: 0.95rem; }
   .chunk .meta span { display: block; font-size: 0.8rem; color: var(--muted); font-variant-numeric: tabular-nums; }
   .chunk a {
     flex-shrink: 0;
@@ -166,44 +166,9 @@
     padding: 12px;
     font-size: 0.88rem;
     margin-bottom: 14px;
-    white-space: pre-line;
   }
   footer { text-align: center; color: var(--muted); font-size: 0.78rem; padding: 12px 0 24px; }
-  canvas, video#probe { display: none; }
-  /* 処理中の動画。iPhoneは画面に見えていない動画の再生を止めてしまうため、処理中は隅に表示する */
-  video#src { display: none; }
-  video#src.preview {
-    display: block;
-    position: fixed;
-    z-index: 50;
-    top: calc(env(safe-area-inset-top, 0px) + 10px);
-    right: 10px;
-    width: 26vw;
-    max-width: 150px;
-    max-height: 38vh;
-    object-fit: contain;
-    background: #000;
-    border-radius: 10px;
-    box-shadow: 0 4px 16px rgba(0,0,0,.3);
-    pointer-events: none;
-  }
-  #inputHost { display: none; }
-
-  /* 動画のキュー */
-  .qhead { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 0.92rem; margin-bottom: 6px; }
-  .qhead span { color: var(--muted); font-size: 0.8rem; font-variant-numeric: tabular-nums; }
-  .queue { border: 1px solid var(--border); border-radius: 10px; padding: 2px 10px; max-height: 42vh; overflow: auto; }
-  .qrow { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border); }
-  .qrow:last-child { border-bottom: none; }
-  .qmeta { flex: 1; min-width: 0; }
-  .qname { display: block; font-size: 0.92rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .qsub { display: block; font-size: 0.78rem; color: var(--muted); font-variant-numeric: tabular-nums; }
-  .qsub.err { color: var(--warn); }
-  .qstate { flex-shrink: 0; font-size: 0.8rem; color: var(--muted); font-variant-numeric: tabular-nums; }
-  .qstate.running { color: var(--accent); font-weight: 600; }
-  .qstate.error { color: var(--warn); }
-  .qdel { flex-shrink: 0; border: none; background: transparent; color: var(--muted); font-size: 1.05rem; padding: 6px 8px; cursor: pointer; }
-  #progFile { text-align: center; font-size: 0.85rem; color: var(--muted); word-break: break-all; margin-bottom: 8px; }
+  canvas, video#src { display: none; }
 </style>
 </head>
 <body>
@@ -219,17 +184,17 @@
 <div class="card" id="stepPick">
   <div id="drop">
     <div class="icon">📥</div>
-    <strong>動画を選択(複数OK)</strong>
-    <p>タップして選ぶか、ここにドラッグ&ドロップ<br>(.mov / .mp4 など・まとめて選べます)</p>
+    <strong>動画を選択</strong>
+    <p>タップして選ぶか、ここにドラッグ&ドロップ<br>(.mov / .mp4 など)</p>
   </div>
+  <input type="file" id="file" accept="video/*,.mov,.mp4,.m4v">
 </div>
-<div id="inputHost"></div>
 
 <!-- STEP 2: 設定 -->
 <div class="card hidden" id="stepSettings">
-  <div class="qhead"><b id="queueTitle">動画 0本</b><span id="queueSummary"></span></div>
-  <div class="queue" id="queueList"></div>
-  <button class="btn secondary" id="btnAddMore">＋ 動画を追加</button>
+  <div class="row"><span class="label">ファイル</span><span class="value" id="infoName">—</span></div>
+  <div class="row"><span class="label">元のサイズ</span><span class="value" id="infoSize">—</span></div>
+  <div class="row"><span class="label">長さ / 解像度</span><span class="value" id="infoMeta">—</span></div>
 
   <fieldset>
     <legend>モード</legend>
@@ -288,46 +253,47 @@
   <div class="estimate" id="estimate"></div>
 
   <button class="btn" id="btnStart">圧縮を開始</button>
-  <button class="btn secondary hidden" id="btnResults">完了した結果を見る</button>
-  <button class="btn secondary" id="btnReset1">最初からやり直す</button>
+  <button class="btn secondary" id="btnReset1">別の動画を選ぶ</button>
 </div>
 
 <!-- STEP 3: 処理中 -->
 <div class="card hidden" id="stepProgress">
-  <p style="text-align:center; font-weight:600; margin-bottom:4px;" id="progTitle">圧縮しています…</p>
-  <p id="progFile"></p>
+  <p style="text-align:center; font-weight:600; margin-bottom:10px;" id="progTitle">圧縮しています…</p>
   <progress id="prog" max="100" value="0"></progress>
   <div id="progText">0%</div>
-  <button class="btn hidden" id="btnKick">▶ 止まっています。タップして再開</button>
-
-  <div class="qhead" style="margin-top:16px;"><b>順番待ちの動画</b><span id="progOverall"></span></div>
-  <div class="queue" id="progQueue"></div>
-  <button class="btn secondary" id="btnAddMore2">＋ 動画を追加(処理中でもOK)</button>
-
   <p style="font-size:.8rem; color:var(--muted); text-align:center; margin-top:10px;" id="progHelp">
     動画を再生しながら再エンコードするため、動画の長さと同じくらい時間がかかります。<br>
     この画面を開いたままお待ちください(画面ロックしないでください)。
   </p>
-  <button class="btn secondary" id="btnSkip">この動画をスキップして次へ</button>
-  <button class="btn secondary" id="btnCancel">中止</button>
+  <button class="btn secondary" id="btnCancel">キャンセル</button>
 </div>
 
 <!-- STEP 4: 完了 -->
 <div class="card hidden" id="stepDone">
   <p style="text-align:center; font-weight:600;" id="doneTitle">✅ 圧縮が完了しました</p>
-  <p class="result-note" id="doneNote"></p>
-  <div id="doneFail" class="hidden"></div>
 
-  <button class="btn hidden" id="btnShareAll">📤 すべてまとめて保存</button>
-  <div id="resultList"></div>
+  <div id="singleResult">
+    <div class="result-size" id="resultSize">—</div>
+    <p class="result-note" id="resultNote"></p>
+    <div class="row" style="margin-top:8px;"><span class="label">元のサイズ</span><span class="value" id="resultOrig">—</span></div>
+    <div class="row"><span class="label">削減率</span><span class="value" id="resultRatio">—</span></div>
+    <button class="btn hidden" id="btnShare">📤 保存先を選んで保存</button>
+    <button class="btn" id="btnDownload">💾 ダウンロード</button>
+    <a class="btn secondary hidden" id="colabLink" target="_blank" rel="noopener"
+       href="https://colab.research.google.com/github/mameogalaxy/dougaayuku/blob/main/transcribe_colab.ipynb">📝 日本語文字起こし(SRT)をする</a>
+  </div>
 
-  <a class="btn secondary hidden" id="colabLink" target="_blank" rel="noopener"
-     href="https://colab.research.google.com/github/mameogalaxy/dougaayuku/blob/main/transcribe_colab.ipynb">📝 日本語文字起こし(SRT)をする</a>
+  <div id="splitResult" class="hidden">
+    <p class="result-note" id="splitNote"></p>
+    <button class="btn hidden" id="btnShareAll">📤 すべてまとめて保存</button>
+    <div id="splitList"></div>
+  </div>
 
-  <button class="btn hidden" id="btnResume">残りを処理する</button>
-  <button class="btn" id="btnAddMore3">＋ 動画を追加</button>
-  <button class="btn secondary" id="btnReset2">最初からやり直す</button>
-  <p style="font-size:.8rem; color:var(--muted); margin-top:10px;" id="doneHelp"></p>
+  <button class="btn secondary" id="btnReset2">別の動画を圧縮する</button>
+  <p style="font-size:.8rem; color:var(--muted); margin-top:10px;" id="doneHelp">
+    iPhoneの場合:「保存先を選んで保存」から<b>「"ファイル"に保存」</b>を選ぶと、好きなフォルダに保存できます(<b>「ビデオを保存」</b>なら写真アプリ)。「ダウンロード」は「ファイル」アプリの「ダウンロード」フォルダに保存されます。<br>
+    文字起こしボタンはGoogle Colabを開きます。ダウンロードした音声をColab上でアップロードすると、faster-whisperによる日本語文字起こし(タイムスタンプ付きSRT)が実行されます。
+  </p>
 </div>
 
 <footer>
@@ -336,7 +302,6 @@
 </footer>
 
 <video id="src" playsinline></video>
-<video id="probe" playsinline muted preload="metadata"></video>
 <canvas id="cv"></canvas>
 
 <script src="vendor/mp4box.min.js"></script>
@@ -755,52 +720,26 @@
   const $ = (id) => document.getElementById(id);
   const steps = { pick: $('stepPick'), settings: $('stepSettings'), progress: $('stepProgress'), done: $('stepDone') };
   const video = $('src');
-  const probeEl = $('probe');
   const canvas = $('cv');
   const ctx = canvas.getContext('2d');
-  const inputHost = $('inputHost');
 
   const AUDIO_BPS = 96000;
   const MIN_VIDEO_BPS = 250000;
   const MAX_VIDEO_BPS = 12000000;
-  const LIMIT = 30 * 1048576;               // Claudeにアップロードできる目安
-  const SHARE_ALL_MAX_BYTES = 80 * 1048576; // 共有シートへ一度に渡してよい上限(iOSのメモリ対策)
-  const SHARE_ALL_MAX_FILES = 8;
-  // 再生が止まったときの扱い(ミリ秒)
-  const STALL_NOTICE_MS = 4000;  // この時間進まなければ「止まっています」と表示して再開を試す
-  const STALL_RETRY_MS = 5000;   // 再開を試す間隔
-  const STALL_FAIL_MS = 30000;   // この時間進まなければ、その動画は失敗として次へ進む
 
-  class UserError extends Error {}
-  const CANCEL = new Error('cancelled');
-  // 中止・スキップの要求が来ていたら処理を抜ける
-  function checkAbort(r) {
-    if (r.cancelled) throw CANCEL;
-    if (r.skip) throw new UserError('スキップしました。');
-  }
-
-  // --- 画面で選択中の設定 ---
-  let targetMB = 20, longEdge = 1280, mode = 'video', audioKbps = 96;
+  let file = null;
+  let objectUrl = null;
+  let duration = 0, srcW = 0, srcH = 0;
+  let targetMB = 20, longEdge = 1280;
+  let mode = 'video', audioKbps = 96;
   let splitMode = 'size', splitValue = 26214400;
-  let audioFile = null;
-
-  // --- キュー ---
-  // job: { id, file, status: probing|pending|running|done|error, duration, w, h, pct, error, mode, runId, ready }
-  let jobs = [];
-  let results = [];      // 完了したファイル { jobId, mode, blob, name, sub }
-  let lastFailed = [];   // 直近の処理で失敗した動画 { name, error }
-  let nextJobId = 1, nextRunId = 1;
-  let run = null;        // 処理中なら { id, cancelled, tok }
-  let batch = null;      // 処理開始時に確定した設定(処理中に追加した動画にも適用する)
-  let resultUrls = [];
+  let splitUrls = [];
   let sharing = false;
-
-  // --- メディア ---
-  let videoUrl = null, videoJob = null;   // 本処理用の<video>に読み込み済みの動画
-  let audioCtx = null, videoSrcNode = null;
-  let mergeAudioEl = null, mergeAudioUrl = null;
-  let recorder = null;
-  let probeChain = Promise.resolve();
+  let audioFile = null, mergeAudioEl = null, mergeAudioUrl = null;
+  let videoSrcNode = null;
+  let recorder = null, chunks = [], cancelled = false, ended = false;
+  let resultBlob = null, resultExt = 'mp4';
+  let audioCtx = null;
 
   function show(name) {
     for (const k in steps) steps[k].classList.toggle('hidden', k !== name);
@@ -813,7 +752,6 @@
     const m = Math.floor(sec / 60), s = Math.round(sec % 60);
     return m + '分' + String(s).padStart(2, '0') + '秒';
   }
-  function baseName(name) { return name.replace(/\.[^.]+$/, '') || 'video'; }
   function showError(msg) {
     const el = $('err');
     el.textContent = msg;
@@ -881,438 +819,116 @@
     return 'webm';
   }
 
-  function friendlyError(e) {
-    if (e instanceof UserError) return e.message;
-    const msg = (e && e.message) ? e.message : String(e);
-    // メモリ不足は原因が分かりにくいので個別に案内する
-    if (/allocat|memory|out of/i.test(msg)) {
-      return '動画が大きすぎて処理できませんでした(端末のメモリ不足)。先に「動画を圧縮」でサイズを下げるか、1本ずつ処理してください。';
-    }
-    return '処理できませんでした: ' + msg;
-  }
-
-  // ===== 設定と見積り =====
-  function settingsNow() {
-    return { mode, targetMB, longEdge, audioKbps, splitMode, splitValue, audioFile };
-  }
-  // 処理中は開始時に確定した設定、それ以外は画面で選択中の設定
-  function curSettings() { return run && batch ? batch : settingsNow(); }
-
-  function videoBitrate(duration, mb) {
-    const targetBits = mb * 1048576 * 8 * 0.92; // コンテナのオーバーヘッド分を差し引く
+  function videoBitrate() {
+    const targetBits = targetMB * 1048576 * 8 * 0.92; // コンテナのオーバーヘッド分を差し引く
     const bps = targetBits / duration - AUDIO_BPS;
     return Math.max(MIN_VIDEO_BPS, Math.min(MAX_VIDEO_BPS, Math.floor(bps)));
   }
 
-  function splitCount(j, s) {
-    return s.splitMode === 'size'
-      ? Math.max(1, Math.ceil(j.file.size / s.splitValue))
-      : Math.max(1, Math.ceil(j.duration / s.splitValue));
-  }
-
-  // 1本ごとの推定(キューの各行に表示する)
-  function jobEstimate(j, s) {
-    if (!j.duration) return null;
-    if (s.mode === 'split') return { text: '約' + splitCount(j, s) + '本に分割', warn: false };
-    if (s.mode === 'audio') {
-      const est = s.audioKbps * 1000 * j.duration / 8;
-      return { text: '推定 ' + fmtSize(est), warn: est > LIMIT };
-    }
-    if (s.mode === 'merge') return { text: '音声を合成', warn: false };
-    const vbps = videoBitrate(j.duration, s.targetMB);
-    const est = (vbps + AUDIO_BPS) * j.duration / 8;
-    return { text: '推定 ' + fmtSize(est), warn: vbps === MIN_VIDEO_BPS && est > s.targetMB * 1048576 };
-  }
-
-  // 1本だけのときの詳しい見積り
-  function detailEstimate(j, s) {
-    if (s.mode === 'split') {
-      const n = splitCount(j, s);
-      const per = j.file.size / n;
+  function updateEstimate() {
+    if (!duration) return;
+    if (mode === 'split') {
+      const n = splitMode === 'size'
+        ? Math.max(1, Math.ceil(file.size / splitValue))
+        : Math.max(1, Math.ceil(duration / splitValue));
+      const per = file.size / n;
       let html = '推定: <b>約' + n + '本</b>(1本あたり ' + fmtSize(per) + ' / '
-               + fmtTime(j.duration / n) + ' 前後)/ 画質はそのまま';
-      html += s.splitMode === 'size'
+               + fmtTime(duration / n) + ' 前後)/ 画質はそのまま';
+      html += splitMode === 'size'
         ? '<br>※ 分割位置はキーフレームに合わせるため、大きさは目安です。'
-        : '<br>※ 分割位置はキーフレームに合わせるため、' + s.splitValue + '秒ちょうどにはなりません。';
-      if (per > LIMIT) {
+        : '<br>※ 分割位置はキーフレームに合わせるため、' + splitValue + '秒ちょうどにはなりません。';
+      if (per > 30 * 1048576) {
         html += '<br><span class="warn">⚠️ 1本が30MBを超えそうです。「約25MB」を選ぶと'
              + 'Claudeにアップロードできる大きさに分割できます。</span>';
       }
-      if (j.file.size > 400 * 1048576) {
+      if (file.size > 400 * 1048576) {
         html += '<br><span class="warn">⚠️ ファイルが大きいため、端末のメモリ不足で失敗することがあります。'
              + '失敗する場合は先に「動画を圧縮」をお使いください。</span>';
       }
-      return html;
+      $('estimate').innerHTML = html;
+      return;
     }
-    if (s.mode === 'audio') {
-      const estBytes = s.audioKbps * 1000 * j.duration / 8;
-      let html = '推定: <b>' + fmtSize(estBytes) + '</b> 前後 / 音声のみ(' + s.audioKbps + ' kbps)';
-      if (estBytes > LIMIT) html += '<br><span class="warn">⚠️ 30MBを超えそうです。品質を下げてください。</span>';
-      return html;
+    if (mode === 'audio') {
+      const estBytes = audioKbps * 1000 * duration / 8;
+      let html = '推定: <b>' + fmtSize(estBytes) + '</b> 前後 / 音声のみ(' + audioKbps + ' kbps)';
+      if (estBytes > 30 * 1048576) {
+        html += '<br><span class="warn">⚠️ 30MBを超えそうです。品質を下げてください。</span>';
+      }
+      $('estimate').innerHTML = html;
+      return;
     }
-    if (s.mode === 'merge') return '音声ファイルを選んで、動画に合成します。';
-    const vbps = videoBitrate(j.duration, s.targetMB);
-    const estBytes = (vbps + AUDIO_BPS) * j.duration / 8;
-    const scale = Math.min(1, s.longEdge / Math.max(j.w, j.h));
-    const w = Math.round(j.w * scale / 2) * 2, h = Math.round(j.h * scale / 2) * 2;
+    const vbps = videoBitrate();
+    const estBytes = (vbps + AUDIO_BPS) * duration / 8;
+    const scale = Math.min(1, longEdge / Math.max(srcW, srcH));
+    const w = Math.round(srcW * scale / 2) * 2, h = Math.round(srcH * scale / 2) * 2;
     let html = '推定: <b>' + fmtSize(estBytes) + '</b> 前後 / ' + w + '×' + h +
                ' / 映像 ' + (vbps / 1000000).toFixed(1) + ' Mbps';
-    if (vbps === MIN_VIDEO_BPS && estBytes > s.targetMB * 1048576) {
+    if (vbps === MIN_VIDEO_BPS && estBytes > targetMB * 1048576) {
       html += '<br><span class="warn">⚠️ 動画が長いため目標サイズに収まらない可能性があります。目標を上げるか動画を分割してください。</span>';
     } else if (vbps < 800000) {
       html += '<br><span class="warn">※ ビットレートが低めです。画質が粗くなる場合は解像度を854pxにすると改善します。</span>';
     }
-    return html;
+    $('estimate').innerHTML = html;
   }
 
-  // 複数本のときの合計見積り
-  function summaryEstimate(list, s) {
-    const totalDur = list.reduce((a, j) => a + j.duration, 0);
-    const totalSize = list.reduce((a, j) => a + j.file.size, 0);
-    if (s.mode === 'merge') {
-      return '<span class="warn">⚠️ 「音声を動画に合成」は1本ずつ処理します。動画を1本だけにしてください。</span>';
-    }
-    let html;
-    if (s.mode === 'split') {
-      const n = list.reduce((a, j) => a + splitCount(j, s), 0);
-      html = '推定: <b>' + list.length + '本 → 合計 約' + n + '本</b>に分割 / 画質はそのまま';
-      if (totalSize > 800 * 1048576) {
-        html += '<br><span class="warn">⚠️ 合計が大きいため、端末のメモリ不足で失敗することがあります。'
-             + '数本ずつに分けて処理してください。</span>';
-      }
-    } else if (s.mode === 'audio') {
-      const est = list.reduce((a, j) => a + s.audioKbps * 1000 * j.duration / 8, 0);
-      html = '推定: ' + list.length + '本 合計 <b>' + fmtSize(est) + '</b> 前後 / 音声のみ(' + s.audioKbps + ' kbps)'
-           + '<br>1本ずつ順番に処理します(所要時間は合計 ' + fmtTime(totalDur) + ' ほど)。';
-    } else {
-      const est = list.reduce((a, j) => a + estBytesOf(j, s), 0);
-      html = '推定: ' + list.length + '本 合計 <b>' + fmtSize(est) + '</b> 前後(1本あたり目標 ' + s.targetMB + ' MB)'
-           + '<br>1本ずつ順番に処理します(所要時間は合計 ' + fmtTime(totalDur) + ' ほど)。';
-    }
-    const warns = list.filter((j) => jobEstimate(j, s).warn).length;
-    if (warns) html += '<br><span class="warn">⚠️ ' + warns + '本は目標サイズ / 30MBに収まらない可能性があります。</span>';
-    return html;
-  }
-  function estBytesOf(j, s) {
-    return (videoBitrate(j.duration, s.targetMB) + AUDIO_BPS) * j.duration / 8;
-  }
-
-  function updateEstimate() {
-    const s = curSettings();
-    const list = jobs.filter((j) => (j.status === 'pending' || j.status === 'probing' || j.status === 'running') && j.duration);
-    const el = $('estimate');
-    if (!list.length) { el.innerHTML = ''; return; }
-    el.innerHTML = list.length === 1 ? detailEstimate(list[0], s) : summaryEstimate(list, s);
-  }
-
-  // ===== キューの表示 =====
-  const STATE_LABEL = {
-    probing: '読み込み中…', pending: '⏳ 待機中', running: '▶ 0%', done: '✅ 完了', error: '⚠️ 失敗',
-  };
-
-  function qrow(j, s) {
-    const row = document.createElement('div');
-    row.className = 'qrow';
-    row.dataset.job = j.id;
-
-    const meta = document.createElement('div');
-    meta.className = 'qmeta';
-    const name = document.createElement('span');
-    name.className = 'qname';
-    name.textContent = j.file.name;
-    const sub = document.createElement('span');
-    sub.className = 'qsub';
-    if (j.status === 'error') {
-      sub.textContent = j.error;
-      sub.classList.add('err');
-    } else if (j.status === 'probing') {
-      sub.textContent = fmtSize(j.file.size);
-    } else {
-      let t = fmtTime(j.duration) + ' / ' + j.w + '×' + j.h + ' ・ ' + fmtSize(j.file.size);
-      if (j.status === 'pending' || j.status === 'running') {
-        const e = jobEstimate(j, s);
-        if (e) { t += ' → ' + e.text; if (e.warn) sub.classList.add('err'); }
-      }
-      sub.textContent = t;
-    }
-    meta.append(name, sub);
-
-    const state = document.createElement('span');
-    state.className = 'qstate ' + j.status;
-    state.textContent = j.status === 'running' ? '▶ ' + Math.round(j.pct || 0) + '%' : STATE_LABEL[j.status];
-    row.append(meta, state);
-
-    if (j.status !== 'running' && j.status !== 'done') {
-      const del = document.createElement('button');
-      del.type = 'button';
-      del.className = 'qdel';
-      del.setAttribute('aria-label', '削除');
-      del.textContent = '✕';
-      del.addEventListener('click', () => removeJob(j.id));
-      row.append(del);
-    }
-    return row;
-  }
-
-  function renderQueue(container, filter) {
-    const s = curSettings();
-    container.textContent = '';
-    const list = jobs.filter(filter);
-    list.forEach((j) => container.appendChild(qrow(j, s)));
-    container.classList.toggle('hidden', !list.length);
-  }
-
-  function renderQueues() {
-    renderQueue($('queueList'), (j) => j.status !== 'done');
-    // 処理中の一覧には、今回の処理で終わった動画も残して進み具合が分かるようにする
-    renderQueue($('progQueue'), (j) => j.status !== 'done' || (run && j.runId === run.id));
-    updateHeads();
-    updateEstimate();
-  }
-
-  function updateStartLabel() {
-    const n = jobs.filter((j) => j.status === 'pending' || j.status === 'probing').length;
-    const base = mode === 'audio' ? '音声を抽出'
-      : (mode === 'merge' ? '音声を動画に合成' : (mode === 'split' ? '分割する' : '圧縮を開始'));
-    $('btnStart').textContent = n > 1 ? base + '(' + n + '本)' : base;
-  }
-
-  function updateHeads() {
-    const active = jobs.filter((j) => j.status !== 'done');
-    $('queueTitle').textContent = '動画 ' + active.length + '本';
-    const total = active.reduce((a, j) => a + j.file.size, 0);
-    $('queueSummary').textContent = active.length ? '合計 ' + fmtSize(total) : '';
-    $('btnResults').classList.toggle('hidden', !results.length);
-    $('btnResults').textContent = '✅ 完了した結果を見る(' + results.length + '件)';
-    updateStartLabel();
-    if (run) updateProgressHeader();
-  }
-
-  function updateProgressHeader() {
-    const cur = jobs.find((j) => j.status === 'running');
-    const finished = jobs.filter((j) => j.runId === run.id && (j.status === 'done' || j.status === 'error')).length;
-    const waiting = jobs.filter((j) => j.status === 'pending' || j.status === 'probing' || j.status === 'running').length;
-    const total = finished + waiting;
-    $('progOverall').textContent = finished + ' / ' + total + ' 完了';
-    if (!cur || !batch) return;
-    const verb = batch.mode === 'audio' ? '音声を抽出' : (batch.mode === 'merge' ? '合成'
-      : (batch.mode === 'split' ? '分割' : '圧縮'));
-    $('progTitle').textContent = total > 1
-      ? (finished + 1) + ' / ' + total + ' 本目を' + verb + 'しています…'
-      : verb + 'しています…';
-    $('progFile').textContent = cur.file.name;
-    $('btnSkip').classList.toggle('hidden', batch.mode === 'split');
-    $('progHelp').innerHTML = batch.mode === 'split'
-      ? '再エンコードしないため短時間で終わります。この画面を開いたままお待ちください。'
-      : '動画を再生しながら再エンコードするため、動画の長さと同じくらい時間がかかります(複数の場合は合計)。<br>'
-        + 'この画面を開いたままお待ちください(画面ロックしないでください)。';
-  }
-
-  function setJobProgress(job, pct, extra) {
-    job.pct = pct;
-    const p = Math.round(pct);
-    const key = p + (extra || '');
-    if (job._key === key) return; // 見た目が変わらないときは描画しない
-    job._key = key;
-    $('prog').value = pct;
-    $('progText').textContent = p + '%' + (extra || '');
-    document.querySelectorAll('.qrow[data-job="' + job.id + '"] .qstate').forEach((el) => {
-      el.textContent = '▶ ' + p + '%';
-    });
-  }
-
-  // ===== 動画の読み込み・追加 =====
-  function isVideoFile(f) {
-    if (!f) return false;
-    if (f.type) return f.type.startsWith('video/');
-    return /\.(mov|mp4|m4v|webm)$/i.test(f.name);
-  }
-
-  // <video>にファイルを読み込んで長さ・解像度を取得する
-  function loadVideoMeta(el, file, opts) {
-    return new Promise((resolve, reject) => {
-      const url = URL.createObjectURL(file);
-      let settled = false;
-      const timer = setTimeout(() => {
-        settle(reject, new UserError('この動画の読み込みに時間がかかりすぎたため中止しました。別の動画でお試しください。'));
-      }, 30000);
-      function settle(fn, v) {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        el.onloadedmetadata = el.ondurationchange = el.onerror = null;
-        if (fn === reject) URL.revokeObjectURL(url);
-        fn(v);
-      }
-      function finish() {
-        const d = el.duration, w = el.videoWidth, h = el.videoHeight;
-        if (!d || !isFinite(d) || !w) {
-          return settle(reject, new UserError('この動画を読み込めませんでした。別の形式(.mov / .mp4)でお試しください。'));
-        }
-        settle(resolve, { duration: d, w, h, url });
-      }
-      el.preload = 'metadata';
-      el.muted = !!(opts && opts.muted);
-      el.onloadedmetadata = () => {
-        // 一部のwebm等は長さがInfinityで返るため、末尾へシークして実際の長さを取得する
-        if (el.duration === Infinity) {
-          el.ondurationchange = () => {
-            if (el.duration === Infinity) return;
-            el.ondurationchange = null;
-            el.currentTime = 0;
-            finish();
-          };
-          el.currentTime = 1e7;
-          return;
-        }
-        finish();
-      };
-      el.onerror = () => settle(reject, new UserError(
-        'この動画はブラウザで再生できない形式のため、処理できません。iPhoneの「設定 > カメラ > フォーマット」を「互換性優先」にして撮影した動画、または .mp4 をお試しください。'));
-      el.src = url;
-    });
-  }
-
-  function swapVideoUrl(url) {
-    if (videoUrl && videoUrl !== url) URL.revokeObjectURL(videoUrl);
-    videoUrl = url;
-  }
-  function releaseProbe(url) {
-    probeEl.removeAttribute('src');
-    try { probeEl.load(); } catch (e) {}
-    URL.revokeObjectURL(url);
-  }
-
-  // 読み込み(メタデータ取得)は1本ずつ順番に行う
-  function probe(j) {
-    const p = probeChain.then(async () => {
-      try {
-        let meta;
-        if (!run && !videoJob) {
-          // 最初の1本は本処理用の<video>に読み込んでおく。
-          // iPhoneでは「開始」ボタンを押した直後でないと再生を始められないため、事前に用意しておく
-          meta = await loadVideoMeta(video, j.file, { muted: false });
-          swapVideoUrl(meta.url);
-          videoJob = j;
-        } else {
-          meta = await loadVideoMeta(probeEl, j.file, { muted: true });
-          releaseProbe(meta.url);
-        }
-        if (!jobs.includes(j)) { if (videoJob === j) videoJob = null; return; }
-        j.duration = meta.duration; j.w = meta.w; j.h = meta.h;
-        j.status = 'pending';
-      } catch (e) {
-        if (videoJob === j) videoJob = null;
-        j.status = 'error';
-        j.error = friendlyError(e);
-      }
-      renderQueues();
-    });
-    probeChain = p.catch(() => {});
-    return p;
-  }
-
-  // 本処理用の<video>が空いていれば、待機中の先頭の動画を読み込んでおく
-  async function primeMain() {
-    if (run || videoJob) return;
-    const j = jobs.find((x) => x.status === 'pending' && x.duration);
-    if (!j) return;
-    videoJob = j; // 読み込み中に二重で走らないよう先に確保する
-    try {
-      const meta = await loadVideoMeta(video, j.file, { muted: false });
-      swapVideoUrl(meta.url);
-    } catch (e) {
-      if (videoJob === j) videoJob = null;
-    }
-  }
-
-  function addFiles(list) {
-    clearError();
-    let files = Array.from(list || []).filter(isVideoFile);
-    if (!files.length) {
-      showError('動画ファイルを選んでください(.mov / .mp4 など)。');
-      return;
-    }
-    // 同じ動画を二重に追加しない(iPhoneは選び直すたびに更新日時が変わることがあるため、名前とサイズで見る)
-    const same = (a, b) => a.name === b.name && a.size === b.size;
-    const fresh = files.filter((f) => !jobs.some((j) => j.status !== 'done' && same(j.file, f)));
-    if (!fresh.length) { showError('その動画はすでに追加されています。'); return; }
-    files = fresh;
-
-    const effMode = run && batch ? batch.mode : mode;
-    if (effMode === 'merge') {
-      // 音声の合成は動画ごとに音声ファイルが要るため、1本ずつしか扱わない
-      const busy = jobs.some((j) => j.status === 'pending' || j.status === 'probing' || j.status === 'running');
-      if (busy) {
-        showError('「音声を動画に合成」は1本ずつ処理します。今の動画の処理が終わってから追加してください。');
-        return;
-      }
-      if (files.length > 1) {
-        files = files.slice(0, 1);
-        showError('「音声を動画に合成」は1本ずつ処理します。最初の1本だけ追加しました。');
-      }
-    }
-
-    for (const f of files) {
-      const j = { id: nextJobId++, file: f, status: 'probing', pct: 0, error: '' };
-      jobs.push(j);
-      j.ready = probe(j);
-    }
-    if (!run) show('settings');
-    renderQueues();
-  }
-
-  // 選ぶたびに新しい<input>を作る。以前の選択のファイルが使えなくなるのを避けるため、
-  // 古い<input>は「最初からやり直す」まで残しておく
-  function pickFiles() {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'video/*,.mov,.mp4,.m4v';
-    input.multiple = true;
-    input.addEventListener('change', () => {
-      const files = Array.from(input.files || []);
-      if (files.length) addFiles(files); else input.remove();
-    });
-    inputHost.appendChild(input);
-    input.click();
-  }
-
+  // --- ファイル選択 ---
   const drop = $('drop');
-  drop.addEventListener('click', pickFiles);
+  drop.addEventListener('click', () => $('file').click());
   drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('hover'); });
   drop.addEventListener('dragleave', () => drop.classList.remove('hover'));
   drop.addEventListener('drop', (e) => {
     e.preventDefault();
     drop.classList.remove('hover');
-    addFiles(e.dataTransfer.files);
+    if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
   });
-  $('btnAddMore').addEventListener('click', pickFiles);
-  $('btnAddMore2').addEventListener('click', pickFiles);
-  $('btnAddMore3').addEventListener('click', pickFiles);
+  $('file').addEventListener('change', (e) => { if (e.target.files[0]) loadFile(e.target.files[0]); });
 
-  function removeJob(id) {
-    const j = jobs.find((x) => x.id === id);
-    if (!j || j.status === 'running' || j.status === 'done') return;
-    jobs = jobs.filter((x) => x !== j);
-    if (videoJob === j) videoJob = null;
-    renderQueues();
-    if (run) return;
-    if (!jobs.some((x) => x.status !== 'done')) {
-      if (results.length) showDone(); else show('pick');
-      return;
-    }
-    primeMain();
+  function loadFile(f) {
+    clearError();
+    file = f;
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+    objectUrl = URL.createObjectURL(f);
+    video.src = objectUrl;
+    video.muted = false;
+    video.onloadedmetadata = () => {
+      // 一部のwebm等は長さがInfinityで返るため、末尾へシークして実際の長さを取得する
+      if (video.duration === Infinity) {
+        video.ondurationchange = () => {
+          if (video.duration === Infinity) return;
+          video.ondurationchange = null;
+          video.currentTime = 0;
+          video.onloadedmetadata();
+        };
+        video.currentTime = 1e7;
+        return;
+      }
+      duration = video.duration;
+      srcW = video.videoWidth;
+      srcH = video.videoHeight;
+      if (!duration || !srcW) {
+        showError('この動画を読み込めませんでした。別の形式(.mov / .mp4)でお試しください。');
+        return;
+      }
+      $('infoName').textContent = f.name;
+      $('infoSize').textContent = fmtSize(f.size);
+      $('infoMeta').textContent = fmtTime(duration) + ' / ' + srcW + '×' + srcH;
+      updateEstimate();
+      show('settings');
+    };
+    video.onerror = () => {
+      showError('この動画はブラウザで再生できない形式のため、圧縮できません。iPhoneの「設定 > カメラ > フォーマット」を「互換性優先」にして撮影した動画、または .mp4 をお試しください。');
+    };
   }
 
-  // ===== 設定の操作 =====
+  // --- 設定 ---
   function segHandler(segId, attr, cb) {
     $(segId).addEventListener('click', (e) => {
       const btn = e.target.closest('button');
       if (!btn) return;
-      $(segId).querySelectorAll('button').forEach((b) => b.classList.remove('active'));
+      $(segId).querySelectorAll('button').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       cb(Number(btn.dataset[attr]));
-      renderQueues();
+      updateEstimate();
     });
   }
   segHandler('segSize', 'mb', (v) => targetMB = v);
@@ -1326,13 +942,13 @@
     const [m, v] = btn.dataset.split.split(':');
     splitMode = m;
     splitValue = Number(v);
-    renderQueues();
+    updateEstimate();
   });
 
   $('segMode').addEventListener('click', (e) => {
     const btn = e.target.closest('button');
     if (!btn) return;
-    $('segMode').querySelectorAll('button').forEach((b) => b.classList.remove('active'));
+    $('segMode').querySelectorAll('button').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     mode = btn.dataset.mode;
     const isAudio = mode === 'audio';
@@ -1342,7 +958,9 @@
     $('fsAudioQ').classList.toggle('hidden', !isAudio);
     $('fsAudioFile').classList.toggle('hidden', mode !== 'merge');
     $('fsSplit').classList.toggle('hidden', !isSplit);
-    renderQueues();
+    $('btnStart').textContent = isAudio ? '音声を抽出'
+      : (mode === 'merge' ? '音声を動画に合成' : (isSplit ? '分割する' : '圧縮を開始'));
+    updateEstimate();
   });
 
   $('btnPickAudio').addEventListener('click', () => $('audioFileInput').click());
@@ -1352,481 +970,244 @@
     $('audioFileName').textContent = audioFile.name + '(' + fmtSize(audioFile.size) + ')';
   });
 
-  // ===== やり直し・中止 =====
-  function stopMedia() {
-    video.classList.remove('preview');
-    $('btnKick').classList.add('hidden');
+  $('btnReset1').addEventListener('click', reset);
+  $('btnReset2').addEventListener('click', reset);
+  function reset() {
+    cancelled = true;
     try { video.pause(); } catch (e) {}
     if (mergeAudioEl) { try { mergeAudioEl.pause(); } catch (e) {} }
-    if (recorder && recorder.state !== 'inactive') { try { recorder.stop(); } catch (e) {} }
-  }
-
-  function resetAll() {
-    if (run) {
-      run.cancelled = true;
-      if (run.tok) run.tok.stop = true;
-      stopMedia();
-      run = null;
-    }
-    jobs = [];
-    results = [];
-    lastFailed = [];
-    videoJob = null;
-    resultUrls.forEach((u) => URL.revokeObjectURL(u));
-    resultUrls = [];
     audioFile = null;
     $('audioFileInput').value = '';
     $('audioFileName').textContent = '未選択';
-    inputHost.textContent = '';
+    splitUrls.forEach((u) => URL.revokeObjectURL(u));
+    splitUrls = [];
+    $('file').value = '';
+    resultBlob = null;
     clearError();
-    renderQueues();
     show('pick');
   }
-  function confirmReset() {
-    if ((results.length || run) && !window.confirm('保存していない結果がすべて消えます。最初からやり直しますか?')) return;
-    resetAll();
-  }
-  $('btnReset1').addEventListener('click', confirmReset);
-  $('btnReset2').addEventListener('click', confirmReset);
-  $('btnResults').addEventListener('click', () => showDone());
 
-  // 止まったときの手動再開。タップ操作の中で再生し直す
-  $('btnKick').addEventListener('click', () => {
-    recoverPlayback();
-  });
-
-  // 今の動画だけをあきらめて、次の動画へ進む
-  $('btnSkip').addEventListener('click', () => {
-    if (!run) return;
-    run.skip = true;
-    if (run.tok) run.tok.stop = true;
-    stopMedia();
-  });
-
+  // --- 圧縮 ---
+  $('btnStart').addEventListener('click', startCompress);
   $('btnCancel').addEventListener('click', () => {
-    if (!run) return;
-    run.cancelled = true;
-    if (run.tok) run.tok.stop = true;
-    stopMedia();
+    cancelled = true;
+    video.pause();
+    if (recorder && recorder.state !== 'inactive') recorder.stop();
+    reset();
   });
 
-  // ===== 処理の実行 =====
-  // 音声の取得にはAudioContextが要る。iPhoneでは操作の直後でないと使えないため、開始ボタンの中で作る
-  function ensureAudioCtx() {
-    if (!audioCtx) {
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      videoSrcNode = audioCtx.createMediaElementSource(video);
-      // 音声処理が止まると動画の再生も止まってしまうため、止まったら再開させる
-      audioCtx.onstatechange = () => {
-        if (run && audioCtx.state !== 'running') { try { audioCtx.resume(); } catch (e) {} }
-      };
-    }
-    audioCtx.resume();
-  }
-
-  function startRun() {
+  async function startCompress() {
     clearError();
-    const pending = jobs.filter((j) => j.status === 'pending' || j.status === 'probing');
-    if (!pending.length) {
-      showError('処理できる動画がありません。動画を追加してください。');
-      return;
-    }
-    const s = settingsNow();
-    if (s.mode === 'merge') {
-      if (pending.length > 1) {
-        showError('「音声を動画に合成」は1本ずつ処理します。動画を1本だけにしてください。');
-        return;
-      }
-      if (!s.audioFile) {
-        showError('合成する音声ファイルを選択してください。');
-        return;
-      }
-    }
-    const mime = s.mode === 'split' ? 'n/a' : (s.mode === 'audio' ? pickAudioMime() : pickMime());
+    if (mode === 'split') { await runSplit(); return; }
+    const isAudio = mode === 'audio';
+    const mime = isAudio ? pickAudioMime() : pickMime();
     if (!mime) {
       showError('お使いのブラウザはこの変換に対応していません。iPhoneならSafari、PCならChrome/Edge/Safariの最新版をお使いください。');
       return;
     }
-    if (s.mode !== 'split') {
-      try { ensureAudioCtx(); } catch (e) { /* 音声が取れなくても映像だけで続行する */ }
+    const isMerge = mode === 'merge';
+    if (isMerge && !audioFile) {
+      showError('合成する音声ファイルを選択してください。');
+      return;
     }
-    lastFailed = [];
-    batch = s;
-    runQueue();
-  }
-  $('btnStart').addEventListener('click', startRun);
-  $('btnResume').addEventListener('click', startRun);
-
-  async function runQueue() {
-    if (run) return;
-    const r = { id: nextRunId++, cancelled: false, skip: false, tok: null };
-    run = r;
+    cancelled = false;
+    ended = false;
+    chunks = [];
+    $('progTitle').textContent = isAudio ? '音声を抽出しています…' : (isMerge ? '合成しています…' : '圧縮しています…');
+    $('progHelp').innerHTML = '動画を再生しながら再エンコードするため、動画の長さと同じくらい時間がかかります。<br>この画面を開いたままお待ちください(画面ロックしないでください)。';
     show('progress');
-    $('prog').value = 0;
-    $('progText').textContent = '0%';
-    $('progFile').textContent = '';
-    renderQueues();
-    try {
-      // 読み込み中の動画があれば終わるのを待つ(本処理用の<video>を取り合わないため)
-      await probeChain;
-      for (;;) {
-        if (run !== r || r.cancelled) break;
-        const job = jobs.find((j) => j.status === 'pending' || j.status === 'probing');
-        if (!job) break;
-        await job.ready;
-        if (run !== r || r.cancelled) break;
-        if (job.status !== 'pending' || !jobs.includes(job)) continue;
-        await runJob(job, r);
-      }
-    } finally {
-      finishQueue(r);
-    }
-  }
-
-  async function runJob(job, r) {
-    job.status = 'running';
-    job.pct = 0;
-    job._key = null;
-    job.runId = r.id;
-    r.skip = false;
-    $('prog').value = 0;
-    $('progText').textContent = '0%';
-    renderQueues();
-    try {
-      const outs = batch.mode === 'split' ? await splitJob(job, r) : await recordJob(job, r);
-      if (r.cancelled) throw CANCEL;
-      job.mode = batch.mode;
-      addResults(job, outs);
-      job.status = 'done';
-    } catch (e) {
-      if (e === CANCEL || r.cancelled) {
-        job.status = 'pending'; // 中止した動画は待機に戻す(あとで再開できる)
-      } else if (e && e.stall && !job.retried) {
-        // 再生が止まった動画は、ほかの動画のあとで1回だけやり直す
-        job.retried = true;
-        job.status = 'pending';
-        jobs = jobs.filter((x) => x !== job).concat([job]);
-      } else {
-        job.status = 'error';
-        job.error = friendlyError(e);
-      }
-    }
-    renderQueues();
-  }
-
-  function drawLoop(tok) {
-    if (tok.stop) return;
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    if (video.requestVideoFrameCallback) {
-      video.requestVideoFrameCallback(() => drawLoop(tok));
-    } else {
-      requestAnimationFrame(() => drawLoop(tok));
-    }
-  }
-
-  // 再生を再開させる(止まったときの復旧)
-  function recoverPlayback() {
-    try { if (audioCtx && audioCtx.state !== 'running') audioCtx.resume(); } catch (e) {}
-    try {
-      if (!video.paused) video.pause();
-      video.play().catch(() => {});
-    } catch (e) {}
-    if (mergeAudioEl && mergeAudioEl.paused) { try { mergeAudioEl.play().catch(() => {}); } catch (e) {} }
-  }
-
-  function stallMessage() {
-    return '再生が止まったため、この動画は中止しました(端末の負荷が高いか、動画の形式が合わない可能性があります)。'
-      + '動画を短く分割するか、解像度を下げてお試しください。'
-      + '[状態: 再生=' + (video.paused ? '停止' : '再生中') + ' / 読込=' + video.readyState
-      + ' / 音声処理=' + (audioCtx ? audioCtx.state : 'なし')
-      + ' / ' + video.videoWidth + '×' + video.videoHeight + ']';
-  }
-
-  // 進み具合を表示しつつ、再生が止まっていないか見張る
-  function progressLoop(tok, job, duration, wd) {
-    if (tok.stop) return;
-    const now = performance.now();
-    const t = video.currentTime;
-    if (document.hidden || video.ended) {
-      wd.lastAt = now; // 画面を離れている間や終了直前は判定しない
-    } else if (t > wd.lastT + 0.02) {
-      wd.lastT = t; wd.lastAt = now; wd.retryAt = 0;
-    }
-    let extra = '(' + fmtTime(t) + ' / ' + fmtTime(duration) + ')';
-    const idle = now - wd.lastAt;
-    const stalled = idle > STALL_NOTICE_MS;
-    if (stalled !== wd.kick) { wd.kick = stalled; $('btnKick').classList.toggle('hidden', !stalled); }
-    if (stalled) {
-      extra += ' ⚠️ 進みが止まっています…再開を試しています';
-      if (now - wd.retryAt > STALL_RETRY_MS) { wd.retryAt = now; recoverPlayback(); }
-      if (idle > STALL_FAIL_MS) {
-        wd.failMsg = stallMessage();
-        tok.stop = true;
-        stopMedia(); // 録画が止まり、呼び出し元でエラーとして扱われる
-        return;
-      }
-    }
-    setJobProgress(job, Math.min(100, t / duration * 100), extra);
-    requestAnimationFrame(() => progressLoop(tok, job, duration, wd));
-  }
-
-  // 圧縮・音声抽出・音声合成: 動画を再生しながら録画する
-  async function recordJob(job, r) {
-    const s = batch;
-    const isAudio = s.mode === 'audio';
-    const isMerge = s.mode === 'merge';
-    const mime = isAudio ? pickAudioMime() : pickMime();
-    if (!mime) throw new UserError('お使いのブラウザはこの変換に対応していません。iPhoneならSafari、PCならChrome/Edge/Safariの最新版をお使いください。');
-
-    // すでに読み込み済みならそのまま使う(iPhoneで再生を始められるようにするため)
-    let meta;
-    if (videoJob === job) {
-      meta = { duration: job.duration, w: job.w, h: job.h };
-    } else {
-      videoJob = null;
-      meta = await loadVideoMeta(video, job.file, { muted: false });
-      swapVideoUrl(meta.url);
-    }
-    videoJob = job;
-    checkAbort(r);
-
-    const tok = { stop: false };
-    const wd = { lastT: -1, lastAt: performance.now(), retryAt: 0, failMsg: '' };
-    r.tok = tok;
 
     // 音声: video要素(+合成モードでは音声ファイル)→ AudioContext → MediaStream(スピーカーには出さない)
     let audioTracks = [];
     mergeAudioEl = null;
     try {
-      ensureAudioCtx();
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        videoSrcNode = audioCtx.createMediaElementSource(video);
+      }
       await audioCtx.resume();
       const dest = audioCtx.createMediaStreamDestination();
       videoSrcNode.disconnect();
       videoSrcNode.connect(dest);
       if (isMerge) {
         if (mergeAudioUrl) URL.revokeObjectURL(mergeAudioUrl);
-        mergeAudioUrl = URL.createObjectURL(s.audioFile);
+        mergeAudioUrl = URL.createObjectURL(audioFile);
         mergeAudioEl = new Audio();
         mergeAudioEl.src = mergeAudioUrl;
         audioCtx.createMediaElementSource(mergeAudioEl).connect(dest);
       }
       audioTracks = dest.stream.getAudioTracks();
     } catch (e) {
-      // 音声の取得に失敗しても映像のみで続行(音声抽出・合成では下でエラーにする)
+      // 音声の取得に失敗しても映像のみで続行(音声抽出モードでは下でエラーにする)
     }
-    checkAbort(r);
     if (isMerge && !mergeAudioEl) {
-      throw new UserError('音声ファイルを読み込めませんでした。別の形式(.m4a / .mp3 など)でお試しください。');
-    }
-
-    let rec, ext;
-    if (isAudio) {
-      if (!audioTracks.length) {
-        throw new UserError('この動画から音声を取得できませんでした。動画に音声トラックが含まれているかご確認ください。');
-      }
-      rec = new MediaRecorder(new MediaStream(audioTracks), {
-        mimeType: mime,
-        audioBitsPerSecond: s.audioKbps * 1000,
-      });
-      ext = audioExt(mime);
-    } else {
-      const scale = Math.min(1, s.longEdge / Math.max(meta.w, meta.h));
-      canvas.width = Math.round(meta.w * scale / 2) * 2;
-      canvas.height = Math.round(meta.h * scale / 2) * 2;
-      const stream = new MediaStream([...canvas.captureStream(30).getVideoTracks(), ...audioTracks]);
-      rec = new MediaRecorder(stream, {
-        mimeType: mime,
-        videoBitsPerSecond: videoBitrate(meta.duration, s.targetMB),
-        audioBitsPerSecond: AUDIO_BPS,
-      });
-      ext = mime.includes('mp4') ? 'mp4' : 'webm';
-    }
-    recorder = rec;
-
-    const chunks = [];
-    const finished = new Promise((resolve, reject) => {
-      rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
-      rec.onstop = () => resolve();
-      rec.onerror = (e) => reject((e && e.error) || new Error('録画中にエラーが発生しました'));
-    });
-
-    try {
-      video.classList.add('preview');
-      video.currentTime = 0;
-      try {
-        await video.play();
-        if (mergeAudioEl) {
-          mergeAudioEl.currentTime = 0;
-          await mergeAudioEl.play();
-        }
-      } catch (e) {
-        video.pause();
-        throw new UserError('再生を開始できませんでした: ' + e.message);
-      }
-      checkAbort(r);
-      wd.lastAt = performance.now();
-      rec.start(1000);
-      if (!isAudio) drawLoop(tok);
-      progressLoop(tok, job, meta.duration, wd);
-      video.onended = () => {
-        tok.stop = true;
-        if (mergeAudioEl) mergeAudioEl.pause();
-        // 最後のフレームを確実に書き込んでから停止
-        setTimeout(() => { if (rec.state !== 'inactive') rec.stop(); }, 300);
-      };
-      await finished;
-    } finally {
-      tok.stop = true;
-      video.onended = null;
-      video.classList.remove('preview');
-      $('btnKick').classList.add('hidden');
-      try { video.pause(); } catch (e) {}
-      if (mergeAudioEl) { try { mergeAudioEl.pause(); } catch (e) {} }
-      if (rec.state !== 'inactive') { try { rec.stop(); } catch (e) {} }
-      recorder = null;
-      videoJob = null; // 再生済みなので、次回は読み込み直す
-    }
-    checkAbort(r);
-    if (wd.failMsg) {
-      const err = new UserError(wd.failMsg);
-      err.stall = true;
-      throw err;
-    }
-    return [{ blob: new Blob(chunks, { type: mime.split(';')[0] }), ext }];
-  }
-
-  // 分割(再エンコードなし)
-  async function splitJob(job, r) {
-    // 進捗表示を描画させてから重い処理に入る
-    await new Promise((res) => setTimeout(res, 50));
-    if (r.cancelled) throw CANCEL;
-    return window.splitVideo(job.file, batch.splitMode, batch.splitValue, (ratio) => setJobProgress(job, ratio * 100));
-  }
-
-  function addResults(job, outs) {
-    const s = batch;
-    const base = baseName(job.file.name);
-    if (s.mode === 'split') {
-      outs.forEach((p, i) => results.push({
-        jobId: job.id, mode: 'split', blob: p.blob,
-        name: base + '_' + String(i + 1).padStart(2, '0') + '.mp4',
-        sub: fmtTime(p.start) + ' 〜 ' + fmtTime(p.end) + ' ・ ' + fmtSize(p.blob.size),
-      }));
+      showError('音声ファイルを読み込めませんでした。別の形式(.m4a / .mp3 など)でお試しください。');
+      show('settings');
       return;
     }
-    const o = outs[0];
-    const suffix = s.mode === 'audio' ? '_audio.' : (s.mode === 'merge' ? '_merged.' : '_compressed.');
-    let sub;
-    if (s.mode === 'audio') {
-      sub = fmtSize(o.blob.size);
+
+    let stream;
+    if (isAudio) {
+      if (!audioTracks.length) {
+        showError('この動画から音声を取得できませんでした。動画に音声トラックが含まれているかご確認ください。');
+        show('settings');
+        return;
+      }
+      stream = new MediaStream(audioTracks);
+      recorder = new MediaRecorder(stream, {
+        mimeType: mime,
+        audioBitsPerSecond: audioKbps * 1000,
+      });
+      resultExt = audioExt(mime);
     } else {
-      const ratio = (1 - o.blob.size / job.file.size) * 100;
-      sub = '元 ' + fmtSize(job.file.size) + ' → ' + fmtSize(o.blob.size)
-          + '(' + (ratio > 0 ? ratio.toFixed(0) + '% 削減' : '削減なし') + ')';
+      const scale = Math.min(1, longEdge / Math.max(srcW, srcH));
+      canvas.width = Math.round(srcW * scale / 2) * 2;
+      canvas.height = Math.round(srcH * scale / 2) * 2;
+      const canvasStream = canvas.captureStream(30);
+      stream = new MediaStream([...canvasStream.getVideoTracks(), ...audioTracks]);
+      recorder = new MediaRecorder(stream, {
+        mimeType: mime,
+        videoBitsPerSecond: videoBitrate(),
+        audioBitsPerSecond: AUDIO_BPS,
+      });
+      resultExt = mime.includes('mp4') ? 'mp4' : 'webm';
     }
-    results.push({ jobId: job.id, mode: s.mode, blob: o.blob, name: base + suffix + o.ext, sub });
+    recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+    recorder.onstop = () => { if (!cancelled) finish(mime); };
+
+    video.currentTime = 0;
+    try {
+      await video.play();
+      if (mergeAudioEl) {
+        mergeAudioEl.currentTime = 0;
+        await mergeAudioEl.play();
+      }
+    } catch (e) {
+      showError('再生を開始できませんでした: ' + e.message);
+      video.pause();
+      show('settings');
+      return;
+    }
+    recorder.start(1000);
+    if (!isAudio) drawLoop();
+    progressLoop();
+
+    video.onended = () => {
+      ended = true;
+      if (mergeAudioEl) mergeAudioEl.pause();
+      // 最後のフレームを確実に書き込んでから停止
+      setTimeout(() => { if (recorder.state !== 'inactive') recorder.stop(); }, 300);
+    };
   }
 
-  function finishQueue(r) {
-    if (run !== r) return; // 途中でやり直された
-    run = null;
-
-    // 失敗した動画は一覧から外して、結果画面で知らせる
-    const failed = jobs.filter((j) => j.status === 'error');
-    lastFailed = failed.map((j) => ({ name: j.file.name, error: j.error }));
-    jobs = jobs.filter((j) => j.status !== 'error');
-    renderQueues();
-
-    if (results.length) { showDone(); return; }
-    const pendingLeft = jobs.some((j) => j.status === 'pending' || j.status === 'probing');
-    show(pendingLeft ? 'settings' : 'pick');
-    if (lastFailed.length) {
-      showError(lastFailed.map((f) => f.name + ':' + f.error).join('\n'));
+  function drawLoop() {
+    if (cancelled || ended) return;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    if (video.requestVideoFrameCallback) {
+      video.requestVideoFrameCallback(() => drawLoop());
+    } else {
+      requestAnimationFrame(drawLoop);
     }
-    primeMain();
   }
 
-  // ===== 結果の表示 =====
-  function showDone() {
-    const doneJobs = jobs.filter((j) => j.status === 'done');
-    let title;
-    if (doneJobs.length === 1) {
-      const m = doneJobs[0].mode;
-      title = m === 'audio' ? '✅ 音声の抽出が完了しました'
-        : (m === 'merge' ? '✅ 音声の合成が完了しました'
-        : (m === 'split' ? '✅ ' + results.length + '本に分割しました' : '✅ 圧縮が完了しました'));
-    } else {
-      title = '✅ ' + doneJobs.length + '本の動画を処理しました'
-        + (results.length !== doneJobs.length ? '(' + results.length + 'ファイル)' : '');
-    }
-    $('doneTitle').textContent = title;
+  function progressLoop() {
+    if (cancelled || ended) return;
+    const pct = Math.min(100, video.currentTime / duration * 100);
+    $('prog').value = pct;
+    $('progText').textContent = Math.round(pct) + '%(' + fmtTime(video.currentTime) + ' / ' + fmtTime(duration) + ')';
+    requestAnimationFrame(progressLoop);
+  }
 
-    const over = results.filter((x) => x.blob.size > LIMIT).length;
-    const note = $('doneNote');
+  // --- 分割(再エンコードなし) ---
+  async function runSplit() {
+    cancelled = false;
+    $('progTitle').textContent = '分割しています…';
+    $('progHelp').textContent = '再エンコードしないため短時間で終わります。この画面を開いたままお待ちください。';
+    $('prog').value = 0;
+    $('progText').textContent = '0%';
+    show('progress');
+    // 進捗表示を描画させてから重い処理に入る
+    await new Promise((r) => setTimeout(r, 50));
+
+    let parts;
+    try {
+      parts = await window.splitVideo(file, splitMode, splitValue, (ratio) => {
+        const pct = Math.round(ratio * 100);
+        $('prog').value = pct;
+        $('progText').textContent = pct + '%';
+      });
+    } catch (e) {
+      const msg = (e && e.message) ? e.message : String(e);
+      // メモリ不足は原因が分かりにくいので個別に案内する
+      const diag = '(' + file.name + ' / ' + fmtSize(file.size) + ')';
+      if (/allocat|memory|out of/i.test(msg)) {
+        showError('動画が大きすぎて分割できませんでした(端末のメモリ不足)。先に「動画を圧縮」でサイズを下げてからお試しください。' + diag);
+      } else {
+        showError('分割できませんでした: ' + msg + ' ' + diag);
+      }
+      show('settings');
+      return;
+    }
+    if (cancelled) return;
+
+    if (!parts.length) {
+      showError('分割できませんでした。別の動画でお試しください。');
+      show('settings');
+      return;
+    }
+    finishSplit(parts);
+  }
+
+  function finishSplit(parts) {
+    splitUrls.forEach((u) => URL.revokeObjectURL(u));
+    splitUrls = [];
+
+    $('doneTitle').textContent = '✅ ' + parts.length + '本に分割しました';
+    $('singleResult').classList.add('hidden');
+    $('splitResult').classList.remove('hidden');
+    const over = parts.filter((p) => p.blob.size > 30 * 1048576).length;
+    const note = $('splitNote');
     if (over === 0) {
-      note.textContent = 'すべてClaudeにアップロードできるサイズです 👍';
+      note.textContent = 'すべてClaudeにアップロードできるサイズです 👍(画質は元のまま)';
       note.className = 'result-note ok';
     } else {
-      note.textContent = over + '件が30MBを超えています。目標サイズを下げるか、解像度を854pxにするか、分割してください。';
+      note.textContent = over + '本が30MBを超えています。より短い長さで分割し直すか、先に圧縮してください。';
       note.className = 'result-note warn';
     }
 
-    const fl = $('doneFail');
-    fl.textContent = '';
-    lastFailed.forEach((f) => {
-      const p = document.createElement('p');
-      p.className = 'result-note warn';
-      p.textContent = '⚠️ ' + f.name + ':' + f.error;
-      fl.appendChild(p);
-    });
-    fl.classList.toggle('hidden', !lastFailed.length);
-
-    renderResults();
-
-    const pending = jobs.filter((j) => j.status === 'pending' || j.status === 'probing').length;
-    $('btnResume').classList.toggle('hidden', !pending);
-    $('btnResume').textContent = '残り' + pending + '本を処理する';
-    $('colabLink').classList.toggle('hidden', !results.some((x) => x.mode === 'audio'));
-    show('done');
-  }
-
-  function renderResults() {
-    resultUrls.forEach((u) => URL.revokeObjectURL(u));
-    resultUrls = [];
-    const list = $('resultList');
-    list.textContent = '';
-
-    const useShare = results.length > 0 && canShareFiles([toFile(results[0].blob, results[0].name)]);
+    const base = (file.name.replace(/\.[^.]+$/, '') || 'video');
+    const nameOf = (i) => base + '_' + String(i + 1).padStart(2, '0') + '.mp4';
+    const useShare = canShareFiles([toFile(parts[0].blob, nameOf(0))]);
 
     // すべてまとめて保存。ただし大量・大容量を一度に共有シートへ渡すと
     // iOSがメモリ不足で落ちるため、小さいときだけ出す
-    const totalBytes = results.reduce((a, x) => a + x.blob.size, 0);
-    const shareAllSafe = results.length > 1
-      && results.length <= SHARE_ALL_MAX_FILES
+    const totalBytes = parts.reduce((a, p) => a + p.blob.size, 0);
+    const SHARE_ALL_MAX_BYTES = 80 * 1048576;
+    const SHARE_ALL_MAX_FILES = 8;
+    const shareAllSafe = parts.length > 1
+      && parts.length <= SHARE_ALL_MAX_FILES
       && totalBytes <= SHARE_ALL_MAX_BYTES;
-    const canShareAll = shareAllSafe && canShareFiles(results.map((x) => toFile(x.blob, x.name)));
+    const canShareAll = shareAllSafe && canShareFiles(parts.map((p, i) => toFile(p.blob, nameOf(i))));
     $('btnShareAll').classList.toggle('hidden', !canShareAll);
-    $('btnShareAll').onclick = () => shareFiles(results.map((x) => toFile(x.blob, x.name)));
 
     let help = 'iPhoneの場合:「保存」を押すと共有メニューが開きます。'
       + '<b>「"ファイル"に保存」</b>で好きなフォルダを選べます('
       + '<b>「ビデオを保存」</b>なら写真アプリに入ります)。<br>'
       + '「⬇」は選択せずに「ダウンロード」フォルダへ保存します。';
-    if (useShare && !canShareAll && results.length > 1) {
+    if (useShare && !canShareAll && parts.length > 1) {
       help += '<br><b>本数・容量が多いため「まとめて保存」は使えません</b>'
             + '(一度に渡すとiPhoneの空きメモリが足りず、ページが再読み込みされてしまうため)。'
             + 'お手数ですが1本ずつ保存してください。';
     }
-    if (results.some((x) => x.mode === 'audio')) {
-      help += '<br>文字起こしボタンはGoogle Colabを開きます。ダウンロードした音声をColab上でアップロードすると、'
-            + 'faster-whisperによる日本語文字起こし(タイムスタンプ付きSRT)が実行されます。';
-    }
     $('doneHelp').innerHTML = help;
 
-    results.forEach((x) => {
-      const url = URL.createObjectURL(x.blob);
-      resultUrls.push(url);
-      const tooBig = x.blob.size > LIMIT;
+    const list = $('splitList');
+    list.textContent = '';
+    parts.forEach((p, i) => {
+      const url = URL.createObjectURL(p.blob);
+      splitUrls.push(url);
+      const name = nameOf(i);
+      const tooBig = p.blob.size > 30 * 1048576;
 
       const row = document.createElement('div');
       row.className = 'chunk';
@@ -1834,9 +1215,9 @@
       const meta = document.createElement('div');
       meta.className = 'meta';
       const b = document.createElement('b');
-      b.textContent = x.name;
+      b.textContent = (i + 1) + ' / ' + parts.length;
       const span = document.createElement('span');
-      span.textContent = x.sub;
+      span.textContent = fmtTime(p.start) + ' 〜 ' + fmtTime(p.end) + ' ・ ' + fmtSize(p.blob.size);
       meta.append(b, span);
       row.append(meta);
 
@@ -1846,13 +1227,13 @@
         btn.type = 'button';
         btn.textContent = '保存';
         if (tooBig) btn.className = 'over';
-        btn.addEventListener('click', () => shareFiles([toFile(x.blob, x.name)]));
+        btn.addEventListener('click', () => shareFiles([toFile(p.blob, name)]));
         row.append(btn);
       }
 
       const a = document.createElement('a');
       a.href = url;
-      a.download = x.name;
+      a.download = name;
       if (useShare) {
         a.className = 'dl';
         a.textContent = '⬇';
@@ -1864,14 +1245,57 @@
       row.append(a);
       list.appendChild(row);
     });
+
+    $('btnShareAll').onclick = () => shareFiles(parts.map((p, i) => toFile(p.blob, nameOf(i))));
+
+    show('done');
   }
 
-  // 処理中や未保存の結果があるときにページを離れそうになったら確認する
-  window.addEventListener('beforeunload', (e) => {
-    if (run || results.length) { e.preventDefault(); e.returnValue = ''; }
+  function finish(mime) {
+    resultBlob = new Blob(chunks, { type: mime.split(';')[0] });
+    chunks = [];
+    $('doneTitle').textContent = mode === 'audio' ? '✅ 音声の抽出が完了しました'
+      : (mode === 'merge' ? '✅ 音声の合成が完了しました' : '✅ 圧縮が完了しました');
+    $('singleResult').classList.remove('hidden');
+    $('splitResult').classList.add('hidden');
+    // 共有シートが使える端末(iPhoneなど)では保存先を選べるボタンを出す
+    $('btnShare').classList.toggle('hidden', !canShareFiles([toFile(resultBlob, resultName())]));
+    // 音声モードでは文字起こし(Colab)への導線を出す
+    $('colabLink').classList.toggle('hidden', mode !== 'audio');
+    $('resultSize').textContent = fmtSize(resultBlob.size);
+    $('resultOrig').textContent = fmtSize(file.size);
+    const ratio = (1 - resultBlob.size / file.size) * 100;
+    $('resultRatio').textContent = ratio > 0 ? ratio.toFixed(0) + '% 削減' : '削減なし';
+    const note = $('resultNote');
+    if (resultBlob.size <= 30 * 1048576) {
+      note.textContent = 'Claudeにアップロードできるサイズです 👍';
+      note.className = 'result-note ok';
+    } else {
+      note.textContent = 'まだ30MBを超えています。目標サイズを下げるか、解像度を854pxにしてもう一度お試しください。';
+      note.className = 'result-note warn';
+    }
+    show('done');
+  }
+
+  function resultName() {
+    const base = (file.name.replace(/\.[^.]+$/, '') || 'video');
+    return base + (mode === 'audio' ? '_audio.' : (mode === 'merge' ? '_merged.' : '_compressed.')) + resultExt;
+  }
+
+  $('btnShare').addEventListener('click', () => {
+    if (!resultBlob) return;
+    shareFiles([toFile(resultBlob, resultName())]);
   });
 
-  renderQueues();
+  $('btnDownload').addEventListener('click', () => {
+    if (!resultBlob) return;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(resultBlob);
+    a.download = resultName();
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  });
 })();
 </script>
 </body>
